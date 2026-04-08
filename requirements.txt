@@ -1,0 +1,6 @@
+streamlit
+pandas
+gspread
+oauth2client
+streamlit-authenticator==0.3.0
+plotly
