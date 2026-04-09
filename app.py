@@ -197,30 +197,63 @@ if df_users is not None:
                 with v4:
                     st.markdown(f"<div class='metric-card' style='border-left:5px solid #A0A0A0;'><div class='metric-label'>Eficiencia Comp.</div><div class='metric-value'>{(wa/ca*100 if ca>0 else 0):.1f}%</div><div class='metric-sub'>Hold Real del período actual.</div></div>", unsafe_allow_html=True)
                 
-                # --- NUEVA SECCIÓN: GRÁFICO COMPARATIVO ---
+                # --- GRÁFICO COMPARATIVO ---
                 st.divider()
                 st.subheader("📊 Comparación Visual: Período A vs Período B")
                 
-                # Preparamos los datos para el gráfico
                 comp_plot_data = pd.DataFrame({
                     'Métrica': ['Net Win', 'Net Win', 'Coin In', 'Coin In'],
                     'Período': ['Actual (A)', 'Referencia (B)', 'Actual (A)', 'Referencia (B)'],
                     'Valor': [wa, wb, ca, cb]
                 })
                 
-                fig_comp = px.bar(
-                    comp_plot_data, 
-                    x='Métrica', 
-                    y='Valor', 
-                    color='Período',
-                    barmode='group',
-                    text_auto='.2s',
-                    template="plotly_dark",
-                    color_discrete_map={'Actual (A)': '#00D1FF', 'Referencia (B)': '#666666'}
-                )
-                
-                fig_comp.update_layout(yaxis_title="Monto ($)", height=500)
+                fig_comp = px.bar(comp_plot_data, x='Métrica', y='Valor', color='Período', barmode='group',
+                                 text_auto='.2s', template="plotly_dark",
+                                 color_discrete_map={'Actual (A)': '#00D1FF', 'Referencia (B)': '#666666'})
                 st.plotly_chart(fig_comp, use_container_width=True)
+
+                # --- SECCIÓN RECUPERADA: ANÁLISIS DETALLADO NARRATIVO ---
+                st.subheader("🕵️ Análisis Inteligente de Variaciones")
+                
+                # Cálculos de diferencias por Activo y Marca
+                ta_id = df_a.groupby('asset_Id')['coin_in'].sum()
+                tb_id = df_b.groupby('asset_Id')['coin_in'].sum()
+                delta_coin_id = (ta_id - tb_id).dropna().sort_values()
+                
+                wa_m = df_a.groupby('marca')['win'].sum()
+                wb_m = df_b.groupby('marca')['win'].sum()
+                delta_win_marca = (wa_m - wb_m).dropna().sort_values()
+
+                with st.container(border=True):
+                    c_ana1, c_ana2 = st.columns(2)
+                    
+                    with c_ana1:
+                        st.markdown("##### 📉 Desempeño Crítico (Activos)")
+                        if not delta_coin_id.empty:
+                            peor_id = delta_coin_id.index[0]
+                            caida_c = delta_coin_id.iloc[0]
+                            st.write(f"La máquina **ID {peor_id}** registró la mayor pérdida de tráfico, con una caída de **{form_num(abs(caida_c))}** en Coin In respecto al período anterior.")
+                            
+                            subida_id = delta_coin_id.index[-1]
+                            alza_c = delta_coin_id.iloc[-1]
+                            if alza_c > 0:
+                                st.write(f"En contraste, la **ID {subida_id}** fue la de mayor crecimiento, aportando **{form_num(alza_c)}** adicionales de tráfico.")
+                        else:
+                            st.write("No hay datos suficientes para comparar activos individuales.")
+
+                    with c_ana2:
+                        st.markdown("##### 🏷️ Impacto por Marca")
+                        if not delta_win_marca.empty:
+                            marca_baja = delta_win_marca.index[0]
+                            per_m = delta_win_marca.iloc[0]
+                            st.write(f"A nivel corporativo, la marca **{marca_baja}** fue la más afectada en rentabilidad, disminuyendo su Net Win en **{form_num(abs(per_m))}**.")
+                            
+                            marca_alta = delta_win_marca.index[-1]
+                            gan_m = delta_win_marca.iloc[-1]
+                            if gan_m > 0:
+                                st.write(f"La marca **{marca_alta}** mostró el mejor comportamiento defensivo, incrementando su recaudación en **{form_num(gan_m)}**.")
+                        else:
+                            st.write("No hay datos suficientes para comparar marcas.")
 
         elif nav == "👤 Gestión Usuarios":
             st.title("👤 Gestión de Usuarios")
