@@ -52,16 +52,14 @@ def load_all_data():
         df_s['fecha'] = pd.to_datetime(df_s['fecha'], dayfirst=True, errors='coerce').dt.date
         df_s = df_s.dropna(subset=['fecha'])
         
-        # LIMPIEZA NUMÉRICA ESTRICTA PARA COINCIDIR CON GOOGLE SHEETS
         for col in ['coin_in', 'win', 'jackpot']:
             if col in df_s.columns:
                 def clean_currency(x):
                     if not x or str(x).strip() == "": return 0.0
-                    # Elimina todo excepto números, puntos, comas y el signo menos
                     cleaned = re.sub(r'[^\d.,-]', '', str(x))
-                    if ',' in cleaned and '.' in cleaned: # Formato europeo/latam 1.234,56
+                    if ',' in cleaned and '.' in cleaned:
                         cleaned = cleaned.replace('.', '').replace(',', '.')
-                    elif ',' in cleaned: # Formato 1234,56
+                    elif ',' in cleaned:
                         cleaned = cleaned.replace(',', '.')
                     try: return float(cleaned)
                     except: return 0.0
@@ -90,11 +88,9 @@ if df_users is not None:
             st.write("")
             authenticator.logout('Cerrar Sesión')
 
-        # --- SECCIÓN 1: DASHBOARD DE SALA ---
         if nav == "📊 Dashboard de Sala":
             st.title("Dashboard Fuente Mayor VDU")
             
-            # FILTROS SOLICITADOS (asset_Id, marca, modelo, juego)
             with st.container(border=True):
                 r1, r2 = st.columns([1, 3])
                 f_rango = r1.date_input("📅 Ventana Temporal", [df_slots['fecha'].min(), df_slots['fecha'].max()])
@@ -105,7 +101,6 @@ if df_users is not None:
                 f_modelo = c3.multiselect("📦 Modelo", sorted(df_slots['modelo'].unique()))
                 f_juego = c4.multiselect("🎮 Juego", sorted(df_slots['juego'].unique()))
             
-            # Aplicar filtros
             df_f = df_slots.copy()
             if len(f_rango) == 2: df_f = df_f[(df_f['fecha'] >= f_rango[0]) & (df_f['fecha'] <= f_rango[1])]
             if f_id: df_f = df_f[df_f['asset_Id'].isin(f_id)]
@@ -113,7 +108,6 @@ if df_users is not None:
             if f_modelo: df_f = df_f[df_f['modelo'].isin(f_modelo)]
             if f_juego: df_f = df_f[df_f['juego'].isin(f_juego)]
 
-            # TOTALES CORREGIDOS
             wt, ct = df_f['win'].sum(), df_f['coin_in'].sum()
             ht = (wt/ct*100) if ct > 0 else 0
             
@@ -129,18 +123,39 @@ if df_users is not None:
                 st.plotly_chart(px.area(df_f.groupby('fecha')[['win', 'coin_in']].sum().reset_index(), x='fecha', y=['win', 'coin_in'], template="plotly_dark", color_discrete_sequence=['#00D1FF', '#FF4B4B']), use_container_width=True)
                 
                 st.subheader("🤵 Hallazgos")
-                # Cálculos detallados para los cuadros
+                
+                # --- INICIO DE CAMBIO DINÁMICO ---
+                if not df_f.empty:
+                    # Determinamos el nivel de análisis
+                    if f_marca:
+                        col_analisis = 'modelo'
+                        contexto = f"en {', '.join(f_marca)}"
+                    else:
+                        col_analisis = 'marca'
+                        contexto = "del mercado"
+
+                    # Dominio de Mercado
+                    lider_df = df_f.groupby(col_analisis)['win'].sum()
+                    lider = lider_df.idxmax()
+                    
+                    # Máxima Eficiencia
+                    efi_df = df_f.groupby(col_analisis).agg({'win':'sum', 'coin_in':'sum'})
+                    efi_df = efi_df[efi_df['coin_in'] > 0]
+                    efi = (efi_df['win'] / efi_df['coin_in']).idxmax() if not efi_df.empty else "N/A"
+                else:
+                    lider, efi, contexto = "N/A", "N/A", ""
+
                 perf_asset = df_f.groupby('asset_Id').agg({'win':'sum','coin_in':'sum','marca':'first'}).reset_index()
                 ociosas = perf_asset[perf_asset['coin_in'] <= 0]
                 avg_win_sala = wt / len(perf_asset) if not perf_asset.empty else 0
                 
                 h1, h2, h3, h4 = st.columns(4)
                 with h1:
-                    lider = df_f.groupby('marca')['win'].sum().idxmax() if not df_f.empty else "N/A"
-                    st.markdown(f"<div class='metric-card' style='border-left:5px solid #00D1FF;'><div class='metric-label'>💎 Dominio Mercado</div><div class='metric-value'>{lider}</div><div class='metric-sub'>Líder en generación de ingresos.</div></div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='metric-card' style='border-left:5px solid #00D1FF;'><div class='metric-label'>💎 Dominio Mercado</div><div class='metric-value'>{lider}</div><div class='metric-sub'>Líder ingresos {contexto}.</div></div>", unsafe_allow_html=True)
                 with h2:
-                    efi = (df_f.groupby('marca')['win'].sum() / df_f.groupby('marca')['coin_in'].sum()).idxmax() if not df_f.empty else "N/A"
-                    st.markdown(f"<div class='metric-card' style='border-left:5px solid #00FF88;'><div class='metric-label'>🚀 Máxima Eficiencia</div><div class='metric-value'>{efi}</div><div class='metric-sub'>Mejor conversión Coin-to-Win.</div></div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='metric-card' style='border-left:5px solid #00FF88;'><div class='metric-label'>🚀 Máxima Eficiencia</div><div class='metric-value'>{efi}</div><div class='metric-sub'>Mejor conversión {contexto}.</div></div>", unsafe_allow_html=True)
+                # --- FIN DE CAMBIO DINÁMICO ---
+
                 with h3:
                     lista_ociosas = ", ".join(ociosas['asset_Id'].astype(str).tolist())
                     st.markdown(f"<div class='metric-card' style='border-left:5px solid #FF4B4B;'><div class='metric-label'>⚠️ Lucro Cesante</div><div class='metric-value'>{len(ociosas)} Assets</div><div class='metric-sub'><b>IDs:</b> {lista_ociosas if lista_ociosas else 'Ninguno'}</div></div>", unsafe_allow_html=True)
@@ -158,7 +173,6 @@ if df_users is not None:
                 st.subheader("🔎 Detalle de Máquinas sin Actividad")
                 st.table(ociosas[['asset_Id', 'marca']])
 
-        # --- SECCIÓN 2: ANALISTA COMPARATIVO ---
         elif nav == "🔄 Analista Comparativo":
             st.title("⚖️ Diagnóstico Comparativo de Períodos")
             
@@ -180,7 +194,6 @@ if df_users is not None:
                 with v1: st.markdown(f"<div class='metric-card' style='border-left:5px solid #00FF88;'><div class='metric-label'>Variación Win</div><div class='metric-value'>{form_num(wa)}</div><div class='metric-sub'>{pct_w:+.1f}% vs Ref.</div></div>", unsafe_allow_html=True)
                 with v2: st.markdown(f"<div class='metric-card' style='border-left:5px solid #FFCC00;'><div class='metric-label'>Impacto Tráfico</div><div class='metric-value'>{pct_c:+.1f}%</div><div class='metric-sub'>Delta de Coin In.</div></div>", unsafe_allow_html=True)
                 with v3:
-                    # Máquina con mayor caída
                     pa, pb = df_a.groupby('asset_Id')['win'].sum(), df_b.groupby('asset_Id')['win'].sum()
                     dif_assets = (pa - pb).dropna().sort_values()
                     peor_id = dif_assets.index[0] if not dif_assets.empty else "N/A"
@@ -189,7 +202,6 @@ if df_users is not None:
                     ociosas_a = df_a.groupby('asset_Id')['coin_in'].sum()
                     st.markdown(f"<div class='metric-card' style='border-left:5px solid #A0A0A0;'><div class='metric-label'>Lucro Cesante</div><div class='metric-value'>{len(ociosas_a[ociosas_a==0])} Assets</div><div class='metric-sub'>Sin actividad en Período A.</div></div>", unsafe_allow_html=True)
 
-                # INFORME NARRATIVO
                 st.subheader("🕵️ Análisis Detallado")
                 bajaron = dif_assets[dif_assets < 0]
                 st.markdown(f"""
