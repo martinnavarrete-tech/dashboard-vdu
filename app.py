@@ -8,12 +8,12 @@ import re
 from datetime import timedelta
 
 # --- 1. CONFIGURACIÓN Y ESTILOS ---
-st.set_page_config(page_title="VDU Intelligence Pro", layout="wide", page_icon="🎰")
+st.set_page_config(page_title="Dashboard VDU", layout="wide", page_icon="🎰")
 
 st.markdown("""
     <style>
     .metric-card {
-        background-color: #1E1E2E;
+        background-color: #1E1E2E;  
         padding: 20px;
         border-radius: 10px;
         border-bottom: 4px solid #333;
