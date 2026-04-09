@@ -128,7 +128,7 @@ if df_users is not None:
             with tab1:
                 st.plotly_chart(px.area(df_f.groupby('fecha')[['win', 'coin_in']].sum().reset_index(), x='fecha', y=['win', 'coin_in'], template="plotly_dark", color_discrete_sequence=['#00D1FF', '#FF4B4B']), use_container_width=True)
                 
-                st.subheader("🤵 Hallazgos del Auditor Estratégico")
+                st.subheader("🤵 Hallazgos")
                 # Cálculos detallados para los cuadros
                 perf_asset = df_f.groupby('asset_Id').agg({'win':'sum','coin_in':'sum','marca':'first'}).reset_index()
                 ociosas = perf_asset[perf_asset['coin_in'] <= 0]
@@ -190,7 +190,7 @@ if df_users is not None:
                     st.markdown(f"<div class='metric-card' style='border-left:5px solid #A0A0A0;'><div class='metric-label'>Lucro Cesante</div><div class='metric-value'>{len(ociosas_a[ociosas_a==0])} Assets</div><div class='metric-sub'>Sin actividad en Período A.</div></div>", unsafe_allow_html=True)
 
                 # INFORME NARRATIVO
-                st.subheader("🕵️ Análisis Detallado del Analista")
+                st.subheader("🕵️ Análisis Detallado")
                 bajaron = dif_assets[dif_assets < 0]
                 st.markdown(f"""
                 <div class="report-box">
