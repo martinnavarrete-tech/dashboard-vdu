@@ -32,7 +32,7 @@ st.markdown("""
 def form_num(valor):
     return f"$ {valor:,.0f}".replace(',', '.')
 
-# --- 2. MOTOR DE DATOS CORREGIDO ---
+# --- 2. MOTOR DE DATOS ---
 @st.cache_data(ttl=60)
 def load_all_data():
     try:
@@ -122,11 +122,11 @@ if df_users is not None:
             with tab1:
                 st.plotly_chart(px.area(df_f.groupby('fecha')[['win', 'coin_in']].sum().reset_index(), x='fecha', y=['win', 'coin_in'], template="plotly_dark", color_discrete_sequence=['#00D1FF', '#FF4B4B']), use_container_width=True)
                 
-                st.subheader("🤵 Hallazgos")
+                st.subheader("🤵 Hallazgos Detallados")
                 
-                # --- INICIO DE CAMBIO DINÁMICO ---
+                # --- LÓGICA DE CÁLCULO PARA HALLAZGOS ENRIQUECIDOS ---
                 if not df_f.empty:
-                    # Determinamos el nivel de análisis
+                    # 1. Nivel de análisis dinámico
                     if f_marca:
                         col_analisis = 'modelo'
                         contexto = f"en {', '.join(f_marca)}"
@@ -134,33 +134,70 @@ if df_users is not None:
                         col_analisis = 'marca'
                         contexto = "del mercado"
 
-                    # Dominio de Mercado
-                    lider_df = df_f.groupby(col_analisis)['win'].sum()
-                    lider = lider_df.idxmax()
+                    # 2. Dominio de Mercado (Win Share)
+                    lider_df = df_f.groupby(col_analisis)['win'].sum().reset_index()
+                    lider_row = lider_df.sort_values('win', ascending=False).iloc[0]
+                    lider_nombre = lider_row[col_analisis]
+                    share_win = (lider_row['win'] / wt * 100) if wt > 0 else 0
                     
-                    # Máxima Eficiencia
+                    # 3. Máxima Eficiencia (Multiplicador de Rendimiento)
                     efi_df = df_f.groupby(col_analisis).agg({'win':'sum', 'coin_in':'sum'})
-                    efi_df = efi_df[efi_df['coin_in'] > 0]
-                    efi = (efi_df['win'] / efi_df['coin_in']).idxmax() if not efi_df.empty else "N/A"
+                    efi_df['yield'] = efi_df['win'] / efi_df['coin_in']
+                    efi_row = efi_df.sort_values('yield', ascending=False).iloc[0]
+                    efi_nombre = efi_row.name
+                    avg_yield_sala = wt / ct if ct > 0 else 0
+                    performance_vs_avg = (efi_row['yield'] / avg_yield_sala) if avg_yield_sala > 0 else 0
+
+                    # 4. Lucro Cesante y Promedios
+                    perf_asset = df_f.groupby('asset_Id').agg({'win':'sum','coin_in':'sum'}).reset_index()
+                    ociosas = perf_asset[perf_asset['coin_in'] <= 0]
+                    porcentaje_ociosas = (len(ociosas) / len(perf_asset) * 100) if not perf_asset.empty else 0
+                    avg_win_sala = wt / len(perf_asset) if not perf_asset.empty else 0
+                    sobre_promedio = len(perf_asset[perf_asset['win'] > avg_win_sala])
                 else:
-                    lider, efi, contexto = "N/A", "N/A", ""
+                    lider_nombre = efi_nombre = "N/A"
+                    share_win = performance_vs_avg = porcentaje_ociosas = avg_win_sala = sobre_promedio = 0
+                    ociosas = pd.DataFrame()
 
-                perf_asset = df_f.groupby('asset_Id').agg({'win':'sum','coin_in':'sum','marca':'first'}).reset_index()
-                ociosas = perf_asset[perf_asset['coin_in'] <= 0]
-                avg_win_sala = wt / len(perf_asset) if not perf_asset.empty else 0
-                
+                # --- RENDERIZADO DE CUADROS ---
                 h1, h2, h3, h4 = st.columns(4)
+                
                 with h1:
-                    st.markdown(f"<div class='metric-card' style='border-left:5px solid #00D1FF;'><div class='metric-label'>💎 Dominio Mercado</div><div class='metric-value'>{lider}</div><div class='metric-sub'>Líder ingresos {contexto}.</div></div>", unsafe_allow_html=True)
+                    st.markdown(f"""
+                        <div class='metric-card' style='border-left:5px solid #00D1FF;'>
+                            <div class='metric-label'>💎 Dominio Mercado</div>
+                            <div class='metric-value'>{lider_nombre}</div>
+                            <div class='metric-sub'>Representa el <b>{share_win:.1f}%</b> del Win Total {contexto}.</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                
                 with h2:
-                    st.markdown(f"<div class='metric-card' style='border-left:5px solid #00FF88;'><div class='metric-label'>🚀 Máxima Eficiencia</div><div class='metric-value'>{efi}</div><div class='metric-sub'>Mejor conversión {contexto}.</div></div>", unsafe_allow_html=True)
-                # --- FIN DE CAMBIO DINÁMICO ---
-
+                    st.markdown(f"""
+                        <div class='metric-card' style='border-left:5px solid #00FF88;'>
+                            <div class='metric-label'>🚀 Máxima Eficiencia</div>
+                            <div class='metric-value'>{efi_nombre}</div>
+                            <div class='metric-sub'>Rinde <b>{performance_vs_avg:.1f}x</b> más que el promedio {contexto}.</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                
                 with h3:
                     lista_ociosas = ", ".join(ociosas['asset_Id'].astype(str).tolist())
-                    st.markdown(f"<div class='metric-card' style='border-left:5px solid #FF4B4B;'><div class='metric-label'>⚠️ Lucro Cesante</div><div class='metric-value'>{len(ociosas)} Assets</div><div class='metric-sub'><b>IDs:</b> {lista_ociosas if lista_ociosas else 'Ninguno'}</div></div>", unsafe_allow_html=True)
+                    st.markdown(f"""
+                        <div class='metric-card' style='border-left:5px solid #FF4B4B;'>
+                            <div class='metric-label'>⚠️ Lucro Cesante</div>
+                            <div class='metric-value'>{len(ociosas)} Assets</div>
+                            <div class='metric-sub'><b>{porcentaje_ociosas:.1f}%</b> de la flota inactiva.<br>IDs: {lista_ociosas if lista_ociosas else 'Ninguno'}</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                
                 with h4:
-                    st.markdown(f"<div class='metric-card' style='border-left:5px solid #FFCC00;'><div class='metric-label'>📊 Promedio ID</div><div class='metric-value'>{form_num(avg_win_sala)}</div><div class='metric-sub'>Media de rendimiento por activo.</div></div>", unsafe_allow_html=True)
+                    st.markdown(f"""
+                        <div class='metric-card' style='border-left:5px solid #FFCC00;'>
+                            <div class='metric-label'>📊 Promedio ID</div>
+                            <div class='metric-value'>{form_num(avg_win_sala)}</div>
+                            <div class='metric-sub'><b>{sobre_promedio}</b> activos superan el rendimiento medio.</div>
+                        </div>
+                    """, unsafe_allow_html=True)
 
             with tab2:
                 col1, col2 = st.columns(2)
@@ -171,7 +208,12 @@ if df_users is not None:
 
             with tab3:
                 st.subheader("🔎 Detalle de Máquinas sin Actividad")
-                st.table(ociosas[['asset_Id', 'marca']])
+                if not ociosas.empty:
+                    # Traemos la marca original para el reporte
+                    det_ociosas = pd.merge(ociosas[['asset_Id']], df_f[['asset_Id', 'marca']].drop_duplicates(), on='asset_Id')
+                    st.table(det_ociosas)
+                else:
+                    st.write("No hay máquinas sin actividad en este período.")
 
         elif nav == "🔄 Analista Comparativo":
             st.title("⚖️ Diagnóstico Comparativo de Períodos")
@@ -201,22 +243,6 @@ if df_users is not None:
                 with v4:
                     ociosas_a = df_a.groupby('asset_Id')['coin_in'].sum()
                     st.markdown(f"<div class='metric-card' style='border-left:5px solid #A0A0A0;'><div class='metric-label'>Lucro Cesante</div><div class='metric-value'>{len(ociosas_a[ociosas_a==0])} Assets</div><div class='metric-sub'>Sin actividad en Período A.</div></div>", unsafe_allow_html=True)
-
-                st.subheader("🕵️ Análisis Detallado")
-                bajaron = dif_assets[dif_assets < 0]
-                st.markdown(f"""
-                <div class="report-box">
-                    <h4>Diagnóstico Operativo Comparativo:</h4>
-                    <ul>
-                        <li><b>Rendimiento:</b> La sala presenta una variación neta del <b>{pct_w:+.1f}%</b> en ganancias.</li>
-                        <li><b>Alertas de Desempeño:</b> Se detectaron <b>{len(bajaron)} máquinas</b> que recaudaron menos que el período anterior.</li>
-                        <li><b>Top Caídas:</b> Los activos <b>{", ".join(bajaron.index[:5].astype(str))}</b> muestran la mayor pérdida de rentabilidad.</li>
-                        <li><b>Eficiencia:</b> El Hold varió de <b>{(wb/cb*100 if cb>0 else 0):.2f}%</b> a <b>{(wa/ca*100 if ca>0 else 0):.2f}%</b>.</li>
-                    </ul>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                st.plotly_chart(px.bar(pd.DataFrame({'Per':['Actual','Referencia'],'Win':[wa,wb]}), x='Per', y='Win', color='Per', template="plotly_dark"), use_container_width=True)
 
         elif nav == "👤 Gestión Usuarios":
             st.title("👤 Gestión de Usuarios")
