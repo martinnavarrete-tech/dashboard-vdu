@@ -1,0 +1,16 @@
+credentials:
+  usernames:
+    admin_vdu:
+      email: admin@casino.com
+      name: "Administrador"
+      password: "123"
+      role: "admin"
+    gerencia_vdu:
+      email: gerencia@casino.com
+      name: "Gerencia de Slots"
+      password: "abc"
+      role: "directorio"
+cookie:
+  expiry_days: 30
+  key: "vdu_secure_key_2026"
+  name: "vdu_auth"
