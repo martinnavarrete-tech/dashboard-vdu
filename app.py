@@ -128,23 +128,19 @@ if df_users is not None:
                     col_analisis = 'modelo' if f_marca else 'marca'
                     contexto = f"en {', '.join(f_marca)}" if f_marca else "del mercado"
 
-                    # 1. Dominio Win Share
                     lider_df = df_f.groupby(col_analisis)['win'].sum().reset_index()
                     lider_row = lider_df.sort_values('win', ascending=False).iloc[0]
                     share_win = (lider_row['win'] / wt * 100) if wt > 0 else 0
                     
-                    # 2. Imán de Tráfico (Coin In)
                     lider_coin = df_f.groupby(col_analisis)['coin_in'].sum().reset_index()
                     lider_coin_row = lider_coin.sort_values('coin_in', ascending=False).iloc[0]
                     share_coin = (lider_coin_row['coin_in'] / ct * 100) if ct > 0 else 0
 
-                    # 3. Eficiencia (Yield)
                     efi_df = df_f.groupby(col_analisis).agg({'win':'sum', 'coin_in':'sum'})
                     efi_df['yield'] = efi_df['win'] / efi_df['coin_in']
                     efi_row = efi_df.sort_values('yield', ascending=False).iloc[0]
                     performance_vs_avg = (efi_row['yield'] / (wt/ct)) if ct > 0 else 0
 
-                    # 4. Lucro Cesante
                     perf_asset = df_f.groupby('asset_Id').agg({'win':'sum','coin_in':'sum'}).reset_index()
                     ociosas = perf_asset[perf_asset['coin_in'] <= 0]
                     porcentaje_ociosas = (len(ociosas) / len(perf_asset) * 100) if not perf_asset.empty else 0
@@ -200,6 +196,31 @@ if df_users is not None:
                     st.markdown(f"<div class='metric-card' style='border-left:5px solid #FF4B4B;'><div class='metric-label'>Asset Crítico</div><div class='metric-value'>ID {dif.index[0] if not dif.empty else 'N/A'}</div><div class='metric-sub'>Mayor caída de recaudación.</div></div>", unsafe_allow_html=True)
                 with v4:
                     st.markdown(f"<div class='metric-card' style='border-left:5px solid #A0A0A0;'><div class='metric-label'>Eficiencia Comp.</div><div class='metric-value'>{(wa/ca*100 if ca>0 else 0):.1f}%</div><div class='metric-sub'>Hold Real del período actual.</div></div>", unsafe_allow_html=True)
+                
+                # --- NUEVA SECCIÓN: GRÁFICO COMPARATIVO ---
+                st.divider()
+                st.subheader("📊 Comparación Visual: Período A vs Período B")
+                
+                # Preparamos los datos para el gráfico
+                comp_plot_data = pd.DataFrame({
+                    'Métrica': ['Net Win', 'Net Win', 'Coin In', 'Coin In'],
+                    'Período': ['Actual (A)', 'Referencia (B)', 'Actual (A)', 'Referencia (B)'],
+                    'Valor': [wa, wb, ca, cb]
+                })
+                
+                fig_comp = px.bar(
+                    comp_plot_data, 
+                    x='Métrica', 
+                    y='Valor', 
+                    color='Período',
+                    barmode='group',
+                    text_auto='.2s',
+                    template="plotly_dark",
+                    color_discrete_map={'Actual (A)': '#00D1FF', 'Referencia (B)': '#666666'}
+                )
+                
+                fig_comp.update_layout(yaxis_title="Monto ($)", height=500)
+                st.plotly_chart(fig_comp, use_container_width=True)
 
         elif nav == "👤 Gestión Usuarios":
             st.title("👤 Gestión de Usuarios")
