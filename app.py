@@ -28,7 +28,9 @@ st.markdown("""
     .report-box { background-color: #161625; padding: 25px; border-radius: 10px; border-left: 4px solid #00D1FF; margin-top: 20px; }
     .main-kpi-val { font-size: 2.8rem; font-weight: 800; color: #FFFFFF; line-height: 1.1; }
     .main-kpi-label { font-size: 0.9rem; color: #A0A0A0; text-transform: uppercase; font-weight: bold; }
-    .bot-response { background-color: #1E1E2E; border-left: 4px solid #00FF88; padding: 15px; border-radius: 5px; margin: 10px 0; color: #E0E0E0; }
+    .bot-response { background-color: #1E1E2E; border-left: 4px solid #00FF88; padding: 20px; border-radius: 5px; margin: 10px 0; color: #E0E0E0; line-height: 1.6; }
+    .bot-alert { color: #FF4B4B; font-weight: bold; }
+    .bot-highlight { color: #00FF88; font-weight: bold; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -91,46 +93,57 @@ def load_all_data():
 
 df_slots, df_users, df_feedback = load_all_data()
 
-# --- 3. INTELIGENCIA ARTIFICIAL (BOT) ---
-def get_ai_response(user_query, context_data):
-    # La API Key se inyecta desde el entorno. 
-    # Si estás en un entorno local, asegúrate de tenerla en st.secrets["gemini_api_key"]
-    api_key = st.secrets.get("gemini_api_key", "") 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={api_key}"
-    
-    system_prompt = f"""
-    Eres el 'Analista Bot VDU' experto en slots y casinos. 
-    Tu tarea es responder dudas de los operadores basándote en los datos actuales del Dashboard:
-    - Net Win Total: {form_num(context_data['win'])}
-    - Coin In Total: {form_num(context_data['coin_in'])}
-    - Hold Real: {context_data['hold']:.2f}%
-    - Activos analizados: {context_data['assets']}
-    
-    Responde de forma técnica pero muy amable y profesional. 
-    Si hay una caída de recaudación, sugiere revisar el tráfico (Coin In) o el Hold.
-    Si la API falla, mantén un tono servicial. Responde siempre en ESPAÑOL.
+# --- 3. ANALISTA LÓGICO (SIN COSTO) ---
+def get_logic_analysis(user_query, df_f):
     """
+    Simula una IA analizando los datos actuales sin usar APIs externas.
+    Detecta palabras clave y calcula métricas en tiempo real.
+    """
+    query = user_query.lower()
     
-    payload = {
-        "contents": [{"parts": [{"text": user_query}]}],
-        "systemInstruction": {"parts": [{"text": system_prompt}]}
-    }
+    # Cálculos base sobre los datos filtrados
+    total_win = df_f['win'].sum()
+    total_coin = df_f['coin_in'].sum()
+    hold = (total_win / total_coin * 100) if total_coin > 0 else 0
+    assets_count = len(df_f['asset_Id'].unique())
     
-    # Intento de conexión con Backoff
-    if api_key:
-        for delay in [1, 2, 4]:
-            try:
-                response = requests.post(url, json=payload, timeout=10)
-                if response.status_code == 200:
-                    result = response.json()
-                    return result['candidates'][0]['content']['parts'][0]['text']
-            except:
-                time.sleep(delay)
+    # Identificar mejores y peores
+    by_asset = df_f.groupby('asset_Id')['win'].sum().sort_values(ascending=False)
+    top_asset = by_asset.index[0] if not by_asset.empty else "N/A"
+    top_win = by_asset.iloc[0] if not by_asset.empty else 0
     
-    # Respuesta de respaldo si la IA falla o no hay API Key
-    return f"""Hola. Actualmente detecto un Net Win de {form_num(context_data['win'])} con un Hold del {context_data['hold']:.2f}%. 
-    Basado en los {context_data['assets']} activos filtrados, el rendimiento se mantiene dentro de los parámetros. 
-    (Nota: Mi motor de lenguaje natural está en mantenimiento, pero sigo analizando tus números en tiempo real)."""
+    low_hold_assets = df_f.groupby('asset_Id').apply(lambda x: (x['win'].sum()/x['coin_in'].sum()*100) if x['coin_in'].sum() > 0 else 0)
+    critical_assets = low_hold_assets[low_hold_assets < 3].index.tolist()
+
+    # Lógica de respuesta por intención
+    if any(word in query for word in ["anomalía", "error", "problema", "mal", "crítico"]):
+        resp = f"🔍 **Informe de Anomalías:** He detectado que de los {assets_count} activos analizados, "
+        if critical_assets:
+            resp += f"hay **{len(critical_assets)} máquinas** con un Hold peligrosamente bajo (menor al 3%). "
+            resp += f"Recomiendo inspeccionar los Assets: {', '.join(map(str, critical_assets[:5]))}."
+        else:
+            resp += "el rendimiento general es estable. El Hold promedio está en un saludable " + f"{hold:.2f}%."
+        return resp
+
+    elif any(word in query for word in ["mejor", "ganancia", "top", "máquina", "ranking"]):
+        return (f"🏆 **Ranking de Rendimiento:** La máquina con mayor recaudación en este periodo es la **ID {top_asset}**, "
+                f"con un Net Win de {form_num(top_win)}. "
+                f"Esto representa un impacto significativo sobre el total de {form_num(total_win)} de la sala.")
+
+    elif any(word in query for word in ["hold", "porcentaje", "eficiencia"]):
+        status = "dentro del rango esperado" if 5 <= hold <= 12 else "fuera de los parámetros ideales"
+        return (f"📊 **Análisis de Eficiencia:** El Hold real actual es del **{hold:.2f}%**. "
+                f"Este valor se encuentra {status}. "
+                f"Recuerda que el Coin In total analizado es de {form_num(total_coin)}.")
+
+    else:
+        # Respuesta genérica inteligente
+        return (f"👋 Hola, soy tu Analista VDU. Basado en los filtros actuales:\n\n"
+                f"- Analizo **{assets_count}** activos.\n"
+                f"- El Net Win acumulado es **{form_num(total_win)}**.\n"
+                f"- El tráfico (Coin In) es de **{form_num(total_coin)}**.\n"
+                f"- El Hold promedio es **{hold:.2f}%**.\n\n"
+                f"¿Deseas que profundice en alguna máquina o anomalía específica?")
 
 # --- 4. FUNCIONES DE ESCRITURA ---
 def enviar_consulta_automatica(usuario, categoria, texto, ai_resp):
@@ -170,9 +183,8 @@ if df_users is not None:
             st.write("")
             authenticator.logout('Cerrar Sesión')
 
-        # Cache de contexto para el Bot
-        if 'current_context' not in st.session_state:
-            st.session_state['current_context'] = {'win': 0, 'coin_in': 0, 'hold': 0, 'assets': 0}
+        # Aplicar filtros globales para que el bot los use
+        df_f_global = df_slots.copy()
 
         if nav == "📊 Dashboard de Sala":
             st.title("Dashboard Fuente Mayor VDU")
@@ -186,15 +198,17 @@ if df_users is not None:
                 f_modelo = c3.multiselect("📦 Modelo", sorted(df_slots['modelo'].unique()))
                 f_juego = c4.multiselect("🎮 Juego", sorted(df_slots['juego'].unique()))
             
-            df_f = df_slots.copy()
             if len(f_rango) == 2:
-                df_f = df_f[(df_f['fecha'] >= f_rango[0]) & (df_f['fecha'] <= f_rango[1])]
-            if f_id: df_f = df_f[df_f['asset_Id'].isin(f_id)]
-            if f_marca: df_f = df_f[df_f['marca'].isin(f_marca)]
-            if f_modelo: df_f = df_f[df_f['modelo'].isin(f_modelo)]
-            if f_juego: df_f = df_f[df_f['juego'].isin(f_juego)]
+                df_f_global = df_f_global[(df_f_global['fecha'] >= f_rango[0]) & (df_f_global['fecha'] <= f_rango[1])]
+            if f_id: df_f_global = df_f_global[df_f_global['asset_Id'].isin(f_id)]
+            if f_marca: df_f_global = df_f_global[df_f_global['marca'].isin(f_marca)]
+            if f_modelo: df_f_global = df_f_global[df_f_global['modelo'].isin(f_modelo)]
+            if f_juego: df_f_global = df_f_global[df_f_global['juego'].isin(f_juego)]
             
-            wt, ct = df_f['win'].sum(), df_f['coin_in'].sum()
+            # Guardar df_f_global en session_state para el bot
+            st.session_state['filtered_df'] = df_f_global
+
+            wt, ct = df_f_global['win'].sum(), df_f_global['coin_in'].sum()
             ht = (wt/ct*100) if ct > 0 else 0
             
             k1, k2, k3 = st.columns(3)
@@ -202,50 +216,41 @@ if df_users is not None:
             with k2: st.markdown(f"<div class='main-kpi-label'>COIN IN</div><div class='main-kpi-val'>{form_num(ct)}</div>", unsafe_allow_html=True)
             with k3: st.markdown(f"<div class='main-kpi-label'>HOLD REAL %</div><div class='main-kpi-val'>{ht:.2f}%</div>", unsafe_allow_html=True)
 
-            # Actualizar contexto del Bot
-            st.session_state['current_context'] = {
-                'win': wt, 'coin_in': ct, 'hold': ht, 'assets': len(df_f['asset_Id'].unique())
-            }
-
-            st.plotly_chart(px.area(df_f.groupby('fecha')[['win', 'coin_in']].sum().reset_index(), x='fecha', y=['win', 'coin_in'], template="plotly_dark", color_discrete_sequence=['#00D1FF', '#FF4B4B']), use_container_width=True)
+            st.plotly_chart(px.area(df_f_global.groupby('fecha')[['win', 'coin_in']].sum().reset_index(), x='fecha', y=['win', 'coin_in'], template="plotly_dark", color_discrete_sequence=['#00D1FF', '#FF4B4B']), use_container_width=True)
 
         elif nav == "🔄 Analista Comparativo":
             st.title("⚖️ Diagnóstico Comparativo")
-            st.info("Esta sección permite comparar dos periodos distintos para identificar variaciones de rendimiento.")
+            st.info("Compara dos periodos para identificar desviaciones.")
 
         elif nav == "🤖 Consultar al Bot":
-            st.title("🤖 Analista Inteligente VDU")
-            st.markdown("### ¿En qué puedo ayudarte hoy?")
-            st.caption("Analizo los datos filtrados actualmente en el Dashboard de Sala.")
+            st.title("🤖 Analista de Sala Directo")
+            st.markdown("### Consultas basadas en Datos Reales")
+            st.caption("He desactivado la dependencia de servicios externos para garantizar respuestas inmediatas y gratuitas.")
             
+            # Recuperar datos filtrados o usar todos si no hay
+            df_analizar = st.session_state.get('filtered_df', df_slots)
+
             with st.container(border=True):
                 with st.form("bot_form"):
-                    pregunta = st.text_input("Escribe tu consulta aquí...", placeholder="Ej: ¿Qué anomalías se han detectado?")
-                    submit = st.form_submit_button("Consultar con IA")
+                    pregunta = st.text_input("Haz una pregunta sobre los datos actuales:", placeholder="Ej: ¿Qué anomalías hay? o ¿Cuál es la mejor máquina?")
+                    submit = st.form_submit_button("Analizar Ahora")
                     
                     if submit and pregunta:
-                        with st.spinner("Bot analizando métricas de sala..."):
-                            contexto = st.session_state['current_context']
-                            respuesta_ia = get_ai_response(pregunta, contexto)
+                        with st.spinner("Procesando lógica de datos..."):
+                            # Usamos el motor lógico local
+                            respuesta_logica = get_logic_analysis(pregunta, df_analizar)
                             
-                            # Guardar en Google Sheets
-                            exito = enviar_consulta_automatica(st.session_state['name'], "Consulta Bot", pregunta, respuesta_ia)
+                            # Guardar en Google Sheets para auditoría
+                            enviar_consulta_automatica(st.session_state['name'], "Análisis Local", pregunta, respuesta_logica)
                             
-                            st.markdown(f"<div class='bot-response'><b>🤖 Analista Bot:</b><br>{respuesta_ia}</div>", unsafe_allow_html=True)
-                            if exito:
-                                st.success("Análisis guardado en el historial.")
-                            
-                            # Forzar recarga de feedback para ver el nuevo registro
+                            st.markdown(f"<div class='bot-response'><b>🤖 Analista VDU:</b><br><br>{respuesta_logica}</div>", unsafe_allow_html=True)
                             st.cache_data.clear()
 
             st.divider()
-            st.subheader("📋 Historial de Consultas Inteligentes")
-            # Recargar datos de feedback para mostrar la nueva fila
+            st.subheader("📋 Historial de Consultas")
             _, _, df_feedback_updated = load_all_data()
             if not df_feedback_updated.empty:
                 st.dataframe(df_feedback_updated.sort_values("Fecha", ascending=False), use_container_width=True, hide_index=True)
-            else:
-                st.write("Aún no hay consultas en el historial.")
 
         elif nav == "👤 Gestión Usuarios":
             st.title("👤 Configuración de Usuarios")
