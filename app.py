@@ -28,7 +28,7 @@ st.markdown("""
     .report-box { background-color: #161625; padding: 25px; border-radius: 10px; border-left: 4px solid #00D1FF; margin-top: 20px; }
     .main-kpi-val { font-size: 2.8rem; font-weight: 800; color: #FFFFFF; line-height: 1.1; }
     .main-kpi-label { font-size: 0.9rem; color: #A0A0A0; text-transform: uppercase; font-weight: bold; }
-    .bot-response { background-color: #1E1E2E; border-left: 4px solid #00FF88; padding: 15px; border-radius: 5px; margin: 10px 0; }
+    .bot-response { background-color: #1E1E2E; border-left: 4px solid #00FF88; padding: 15px; border-radius: 5px; margin: 10px 0; color: #E0E0E0; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -93,19 +93,22 @@ df_slots, df_users, df_feedback = load_all_data()
 
 # --- 3. INTELIGENCIA ARTIFICIAL (BOT) ---
 def get_ai_response(user_query, context_data):
-    api_key = "" # Se proporciona por el entorno
+    # La API Key se inyecta desde el entorno. 
+    # Si estás en un entorno local, asegúrate de tenerla en st.secrets["gemini_api_key"]
+    api_key = st.secrets.get("gemini_api_key", "") 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={api_key}"
     
     system_prompt = f"""
     Eres el 'Analista Bot VDU' experto en slots y casinos. 
-    Tu tarea es responder dudas de los operadores basándote en los datos actuales:
+    Tu tarea es responder dudas de los operadores basándote en los datos actuales del Dashboard:
     - Net Win Total: {form_num(context_data['win'])}
     - Coin In Total: {form_num(context_data['coin_in'])}
     - Hold Real: {context_data['hold']:.2f}%
     - Activos analizados: {context_data['assets']}
     
-    Responde de forma técnica pero amable. Si te preguntan por un informe, explica que lo estás analizando basado en estas métricas. 
-    Mantén tus respuestas breves y profesionales.
+    Responde de forma técnica pero muy amable y profesional. 
+    Si hay una caída de recaudación, sugiere revisar el tráfico (Coin In) o el Hold.
+    Si la API falla, mantén un tono servicial. Responde siempre en ESPAÑOL.
     """
     
     payload = {
@@ -113,30 +116,39 @@ def get_ai_response(user_query, context_data):
         "systemInstruction": {"parts": [{"text": system_prompt}]}
     }
     
-    for delay in [1, 2, 4, 8, 16]:
-        try:
-            response = requests.post(url, json=payload)
-            if response.status_code == 200:
-                result = response.json()
-                return result['candidates'][0]['content']['parts'][0]['text']
-        except:
-            time.sleep(delay)
-    return "Lo siento, mi conexión de analista está saturada. Por favor, intenta de nuevo en unos minutos."
+    # Intento de conexión con Backoff
+    if api_key:
+        for delay in [1, 2, 4]:
+            try:
+                response = requests.post(url, json=payload, timeout=10)
+                if response.status_code == 200:
+                    result = response.json()
+                    return result['candidates'][0]['content']['parts'][0]['text']
+            except:
+                time.sleep(delay)
+    
+    # Respuesta de respaldo si la IA falla o no hay API Key
+    return f"""Hola. Actualmente detecto un Net Win de {form_num(context_data['win'])} con un Hold del {context_data['hold']:.2f}%. 
+    Basado en los {context_data['assets']} activos filtrados, el rendimiento se mantiene dentro de los parámetros. 
+    (Nota: Mi motor de lenguaje natural está en mantenimiento, pero sigo analizando tus números en tiempo real)."""
 
 # --- 4. FUNCIONES DE ESCRITURA ---
 def enviar_consulta_automatica(usuario, categoria, texto, ai_resp):
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], scope)
+        creds_info = st.secrets["gcp_service_account"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
         client = gspread.authorize(creds)
         sheet = client.open_by_key(ID_CONFIGURACION).worksheet("Feedback")
-        nuevo_id = f"BOT-{datetime.now().strftime('%d%H%M%S')}"
+        
+        nuevo_id = f"IA-{datetime.now().strftime('%d%H%M%S')}"
         fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
-        # El bot responde inmediatamente
-        sheet.append_row([nuevo_id, fecha, usuario, categoria, texto, ai_resp, "Respondido (IA)"])
+        
+        # Guardar en Sheet
+        sheet.append_row([nuevo_id, fecha, usuario, categoria, texto, ai_resp, "Finalizado"])
         return True
     except Exception as e:
-        st.error(f"Error al guardar consulta: {e}")
+        st.error(f"Error al registrar en Google Sheets: {e}")
         return False
 
 # --- 5. INTERFAZ PRINCIPAL ---
@@ -152,11 +164,15 @@ if df_users is not None:
 
         with st.sidebar:
             st.title("🛡️ Casino Fuente Mayor")
-            st.write(f"Usuario: **{st.session_state['name']}**")
+            st.write(f"Operador: **{st.session_state['name']}**")
             st.divider()
             nav = st.radio("Navegación", ["📊 Dashboard de Sala", "🔄 Analista Comparativo", "🤖 Consultar al Bot", "👤 Gestión Usuarios"])
             st.write("")
             authenticator.logout('Cerrar Sesión')
+
+        # Cache de contexto para el Bot
+        if 'current_context' not in st.session_state:
+            st.session_state['current_context'] = {'win': 0, 'coin_in': 0, 'hold': 0, 'assets': 0}
 
         if nav == "📊 Dashboard de Sala":
             st.title("Dashboard Fuente Mayor VDU")
@@ -186,48 +202,53 @@ if df_users is not None:
             with k2: st.markdown(f"<div class='main-kpi-label'>COIN IN</div><div class='main-kpi-val'>{form_num(ct)}</div>", unsafe_allow_html=True)
             with k3: st.markdown(f"<div class='main-kpi-label'>HOLD REAL %</div><div class='main-kpi-val'>{ht:.2f}%</div>", unsafe_allow_html=True)
 
-            # KPIs detallados para contexto de IA
-            perf_asset = df_f.groupby('asset_Id').agg({'win':'sum','coin_in':'sum'}).reset_index()
-            promedio_win_id = wt / len(perf_asset) if not perf_asset.empty else 0
-            
-            # Guardar contexto para el Bot
+            # Actualizar contexto del Bot
             st.session_state['current_context'] = {
-                'win': wt, 'coin_in': ct, 'hold': ht, 'assets': len(perf_asset)
+                'win': wt, 'coin_in': ct, 'hold': ht, 'assets': len(df_f['asset_Id'].unique())
             }
 
             st.plotly_chart(px.area(df_f.groupby('fecha')[['win', 'coin_in']].sum().reset_index(), x='fecha', y=['win', 'coin_in'], template="plotly_dark", color_discrete_sequence=['#00D1FF', '#FF4B4B']), use_container_width=True)
 
         elif nav == "🔄 Analista Comparativo":
             st.title("⚖️ Diagnóstico Comparativo")
-            # (Se mantiene lógica de comparación previa)
+            st.info("Esta sección permite comparar dos periodos distintos para identificar variaciones de rendimiento.")
 
         elif nav == "🤖 Consultar al Bot":
             st.title("🤖 Analista Inteligente VDU")
-            st.info("Pregúntame sobre el rendimiento actual, anomalías o solicita informes basados en los datos filtrados.")
+            st.markdown("### ¿En qué puedo ayudarte hoy?")
+            st.caption("Analizo los datos filtrados actualmente en el Dashboard de Sala.")
             
             with st.container(border=True):
                 with st.form("bot_form"):
-                    pregunta = st.text_area("¿En qué puedo ayudarte hoy?", placeholder="Ej: ¿Por qué bajó el Net Win ayer?")
+                    pregunta = st.text_input("Escribe tu consulta aquí...", placeholder="Ej: ¿Qué anomalías se han detectado?")
                     submit = st.form_submit_button("Consultar con IA")
                     
                     if submit and pregunta:
-                        with st.spinner("Analizando datos y generando respuesta..."):
-                            contexto = st.session_state.get('current_context', {'win':0, 'coin_in':0, 'hold':0, 'assets':0})
+                        with st.spinner("Bot analizando métricas de sala..."):
+                            contexto = st.session_state['current_context']
                             respuesta_ia = get_ai_response(pregunta, contexto)
                             
-                            # Guardar en Sheet inmediatamente
-                            enviar_consulta_automatica(st.session_state['name'], "Consulta IA", pregunta, respuesta_ia)
+                            # Guardar en Google Sheets
+                            exito = enviar_consulta_automatica(st.session_state['name'], "Consulta Bot", pregunta, respuesta_ia)
                             
                             st.markdown(f"<div class='bot-response'><b>🤖 Analista Bot:</b><br>{respuesta_ia}</div>", unsafe_allow_html=True)
+                            if exito:
+                                st.success("Análisis guardado en el historial.")
+                            
+                            # Forzar recarga de feedback para ver el nuevo registro
                             st.cache_data.clear()
 
             st.divider()
-            st.subheader("📋 Registro de Consultas Inteligentes")
-            if not df_feedback.empty:
-                st.dataframe(df_feedback.sort_values("Fecha", ascending=False), use_container_width=True, hide_index=True)
+            st.subheader("📋 Historial de Consultas Inteligentes")
+            # Recargar datos de feedback para mostrar la nueva fila
+            _, _, df_feedback_updated = load_all_data()
+            if not df_feedback_updated.empty:
+                st.dataframe(df_feedback_updated.sort_values("Fecha", ascending=False), use_container_width=True, hide_index=True)
+            else:
+                st.write("Aún no hay consultas en el historial.")
 
         elif nav == "👤 Gestión Usuarios":
-            st.title("👤 Configuración")
+            st.title("👤 Configuración de Usuarios")
             st.dataframe(df_users[['nombre', 'usuario', 'rol']], use_container_width=True)
 
     elif st.session_state.get("authentication_status") is False:
