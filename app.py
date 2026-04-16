@@ -26,12 +26,18 @@ st.markdown("""
     .report-box { background-color: #161625; padding: 25px; border-radius: 10px; border-left: 4px solid #00D1FF; margin-top: 20px; }
     .main-kpi-val { font-size: 2.8rem; font-weight: 800; color: #FFFFFF; line-height: 1.1; }
     .main-kpi-label { font-size: 0.9rem; color: #A0A0A0; text-transform: uppercase; font-weight: bold; }
-    .status-badge { padding: 4px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; }
     </style>
 """, unsafe_allow_html=True)
 
 def form_num(valor):
-    return f"$ {valor:,.0f}".replace(',', '.')
+    try:
+        return f"$ {valor:,.0f}".replace(',', '.')
+    except:
+        return "$ 0"
+
+# IDs de los Libros de Google Sheets
+ID_CONFIGURACION = "1W_68ToMyy_nu1oPH7ePFj74_vc1op5bGiFoP4KtaY0I"
+ID_DATOS_CUBO = "1ZYn6foApzeEeKg_qKzW9faQFjBPXHoc8ffB_CeZ3f_s"
 
 # --- 2. MOTOR DE DATOS ---
 @st.cache_data(ttl=60)
@@ -42,16 +48,15 @@ def load_all_data():
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
         client = gspread.authorize(creds)
         
-        # Conexión a Usuarios
-        sheet_u = client.open_by_key("1W_68ToMyy_nu1oPH7ePFj74_vc1op5bGiFoP4KtaY0I").worksheet("Usuarios")
+        # Usuarios (Libro Configuración)
+        sheet_u = client.open_by_key(ID_CONFIGURACION).worksheet("Usuarios")
         df_u = pd.DataFrame(sheet_u.get_all_records())
         
-        # Conexión a Cubo
-        sheet_s = client.open_by_key("1ZYn6foApzeEeKg_qKzW9faQFjBPXHoc8ffB_CeZ3f_s").worksheet("Cubo")
+        # Cubo (Libro Datos)
+        sheet_s = client.open_by_key(ID_DATOS_CUBO).worksheet("Cubo")
         data_s = sheet_s.get_all_values()
         df_s = pd.DataFrame(data_s[1:], columns=data_s[0])
         
-        # Limpieza de Cubo
         df_s = df_s.loc[:, df_s.columns.str.contains('^$|Unnamed') == False]
         df_s['fecha'] = pd.to_datetime(df_s['fecha'], dayfirst=True, errors='coerce').dt.date
         df_s = df_s.dropna(subset=['fecha'])
@@ -69,17 +74,20 @@ def load_all_data():
                     except: return 0.0
                 df_s[col] = df_s[col].apply(clean_currency)
         
-        # Carga de Consultas (Feedback)
+        # Feedback (Ahora en Libro Configuración)
+        df_fback = pd.DataFrame(columns=["ID", "Fecha", "Usuario", "Categoria", "Consulta", "Respuesta", "Estado"])
         try:
-            sheet_f = client.open_by_key("1ZYn6foApzeEeKg_qKzW9faQFjBPXHoc8ffB_CeZ3f_s").worksheet("Feedback")
-            df_fback = pd.DataFrame(sheet_f.get_all_records())
+            sheet_f = client.open_by_key(ID_CONFIGURACION).worksheet("Feedback")
+            data_f = sheet_f.get_all_records()
+            if data_f:
+                df_fback = pd.DataFrame(data_f)
         except:
-            df_fback = pd.DataFrame(columns=["ID", "Fecha", "Usuario", "Categoria", "Consulta", "Respuesta", "Estado"])
+            pass
             
         return df_s, df_u, df_fback
     except Exception as e:
-        st.error(f"Error de sincronización: {e}")
-        return None, None, None
+        st.error(f"Error de sincronización de datos: {e}")
+        return None, None, pd.DataFrame()
 
 df_slots, df_users, df_feedback = load_all_data()
 
@@ -89,24 +97,37 @@ def enviar_consulta(usuario, categoria, texto):
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], scope)
         client = gspread.authorize(creds)
-        sheet = client.open_by_key("1ZYn6foApzeEeKg_qKzW9faQFjBPXHoc8ffB_CeZ3f_s").worksheet("Feedback")
-        nuevo_id = f"Q-{datetime.now().strftime('%M%S')}"
+        
+        try:
+            # Apuntamos al libro de Configuración
+            sheet = client.open_by_key(ID_CONFIGURACION).worksheet("Feedback")
+        except:
+            st.error("La pestaña 'Feedback' no fue encontrada en el libro VDU_Configuracion.")
+            return False
+            
+        nuevo_id = f"Q-{datetime.now().strftime('%d%H%M%S')}"
         fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
         sheet.append_row([nuevo_id, fecha, usuario, categoria, texto, "", "Pendiente"])
         return True
-    except: return False
+    except Exception as e:
+        st.error(f"Error técnico al guardar: {e}")
+        return False
 
 def responder_consulta(ticket_id, respuesta_texto):
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], scope)
         client = gspread.authorize(creds)
-        sheet = client.open_by_key("1ZYn6foApzeEeKg_qKzW9faQFjBPXHoc8ffB_CeZ3f_s").worksheet("Feedback")
+        sheet = client.open_by_key(ID_CONFIGURACION).worksheet("Feedback")
         celda = sheet.find(ticket_id)
-        sheet.update_cell(celda.row, 6, respuesta_texto) # Columna Respuesta
-        sheet.update_cell(celda.row, 7, "Respondido")    # Columna Estado
-        return True
-    except: return False
+        if celda:
+            sheet.update_cell(celda.row, 6, respuesta_texto)
+            sheet.update_cell(celda.row, 7, "Respondido")
+            return True
+        return False
+    except Exception as e:
+        st.error(f"Error al responder: {e}")
+        return False
 
 # --- 3. AUTENTICACIÓN ---
 if df_users is not None:
@@ -116,8 +137,9 @@ if df_users is not None:
     authenticator.login(location='main')
 
     if st.session_state.get("authentication_status"):
-        user_role = credentials["usernames"][st.session_state['username']]["role"]
-        
+        curr_user = st.session_state['username'].lower()
+        user_role = credentials["usernames"][curr_user]["role"]
+
         with st.sidebar:
             st.title("🛡️ Casino Fuente Mayor")
             st.write(f"Usuario: **{st.session_state['name']}**")
@@ -141,7 +163,9 @@ if df_users is not None:
                 f_juego = c4.multiselect("🎮 Juego", sorted(df_slots['juego'].unique()))
             
             df_f = df_slots.copy()
-            if len(f_rango) == 2: df_f = df_f[(df_f['fecha'] >= f_rango[0]) & (df_f['fecha'] <= f_rango[1])]
+            if len(f_rango) == 2:
+                df_f = df_f[(df_f['fecha'] >= f_rango[0]) & (df_f['fecha'] <= f_rango[1])]
+            
             if f_id: df_f = df_f[df_f['asset_Id'].isin(f_id)]
             if f_marca: df_f = df_f[df_f['marca'].isin(f_marca)]
             if f_modelo: df_f = df_f[df_f['modelo'].isin(f_modelo)]
@@ -162,31 +186,37 @@ if df_users is not None:
                 st.plotly_chart(px.area(df_f.groupby('fecha')[['win', 'coin_in']].sum().reset_index(), x='fecha', y=['win', 'coin_in'], template="plotly_dark", color_discrete_sequence=['#00D1FF', '#FF4B4B']), use_container_width=True)
                 
                 st.subheader("🤵 Hallazgos Detallados")
+                
                 if not df_f.empty:
                     col_analisis = 'modelo' if f_marca else 'marca'
                     contexto = f"en {', '.join(f_marca)}" if f_marca else "del mercado"
+
                     lider_df = df_f.groupby(col_analisis)['win'].sum().reset_index()
                     lider_row = lider_df.sort_values('win', ascending=False).iloc[0]
                     share_win = (lider_row['win'] / wt * 100) if wt > 0 else 0
-                    lider_coin = df_f.groupby(col_analisis)['coin_in'].sum().reset_index()
-                    lider_coin_row = lider_coin.sort_values('coin_in', ascending=False).iloc[0]
-                    share_coin = (lider_coin_row['coin_in'] / ct * 100) if ct > 0 else 0
+
                     efi_df = df_f.groupby(col_analisis).agg({'win':'sum', 'coin_in':'sum'})
                     efi_df['yield'] = efi_df['win'] / efi_df['coin_in']
                     efi_row = efi_df.sort_values('yield', ascending=False).iloc[0]
                     performance_vs_avg = (efi_row['yield'] / (wt/ct)) if ct > 0 else 0
+
                     perf_asset = df_f.groupby('asset_Id').agg({'win':'sum','coin_in':'sum'}).reset_index()
                     ociosas = perf_asset[perf_asset['coin_in'] <= 0]
-                    porcentaje_ociosas = (len(ociosas) / len(perf_asset) * 100) if not perf_asset.empty else 0
-                else:
-                    lider_row = lider_coin_row = efi_row = pd.Series({col_analisis: 'N/A'})
-                    share_win = share_coin = performance_vs_avg = porcentaje_ociosas = 0
+                    pct_ociosas = (len(ociosas) / len(perf_asset) * 100) if not perf_asset.empty else 0
+                    ociosas_ids = ", ".join(map(str, ociosas['asset_Id'].tolist()[:5])) + ("..." if len(ociosas) > 5 else "")
 
-                h1, h2, h3, h4 = st.columns(4)
-                with h1: st.markdown(f"<div class='metric-card' style='border-left:5px solid #00D1FF;'><div class='metric-label'>💎 Dominio Win</div><div class='metric-value'>{lider_row[col_analisis]}</div><div class='metric-sub'>Representa el <b>{share_win:.1f}%</b> del Win Total {contexto}.</div></div>", unsafe_allow_html=True)
-                with h2: st.markdown(f"<div class='metric-card' style='border-left:5px solid #BB86FC;'><div class='metric-label'>🔥 Imán de Tráfico</div><div class='metric-value'>{lider_coin_row[col_analisis]}</div><div class='metric-sub'>Mueve el <b>{share_coin:.1f}%</b> del Coin In {contexto}.</div></div>", unsafe_allow_html=True)
-                with h3: st.markdown(f"<div class='metric-card' style='border-left:5px solid #00FF88;'><div class='metric-label'>🚀 Máxima Eficiencia</div><div class='metric-value'>{efi_row.name}</div><div class='metric-sub'>Rinde <b>{performance_vs_avg:.1f}x</b> más que el promedio de sala.</div></div>", unsafe_allow_html=True)
-                with h4: st.markdown(f"<div class='metric-card' style='border-left:5px solid #FF4B4B;'><div class='metric-label'>⚠️ Lucro Cesante</div><div class='metric-value'>{len(ociosas)} Assets</div><div class='metric-sub'><b>{porcentaje_ociosas:.1f}%</b> de la flota analizada sin actividad física.</div></div>", unsafe_allow_html=True)
+                    promedio_win_id = wt / len(perf_asset) if not perf_asset.empty else 0
+                    superan_promedio = len(perf_asset[perf_asset['win'] > promedio_win_id])
+
+                    h1, h2, h3, h4 = st.columns(4)
+                    with h1:
+                        st.markdown(f"<div class='metric-card' style='border-left:5px solid #00D1FF;'><div class='metric-label'>💎 DOMINIO MERCADO</div><div class='metric-value'>{lider_row[col_analisis]}</div><div class='metric-sub'>Representa el <b>{share_win:.1f}%</b> del Win Total {contexto}.</div></div>", unsafe_allow_html=True)
+                    with h2:
+                        st.markdown(f"<div class='metric-card' style='border-left:5px solid #00FF88;'><div class='metric-label'>🚀 MÁXIMA EFICIENCIA</div><div class='metric-value'>{efi_row.name}</div><div class='metric-sub'>Rinde <b>{performance_vs_avg:.1f}x</b> más que el promedio del mercado.</div></div>", unsafe_allow_html=True)
+                    with h3:
+                        st.markdown(f"<div class='metric-card' style='border-left:5px solid #FF4B4B;'><div class='metric-label'>⚠️ LUCRO CESANTE</div><div class='metric-value'>{len(ociosas)} Assets</div><div class='metric-sub'><b>{pct_ociosas:.1f}%</b> de la flota inactiva.<br>IDs: {ociosas_ids if ociosas_ids else 'Ninguno'}</div></div>", unsafe_allow_html=True)
+                    with h4:
+                        st.markdown(f"<div class='metric-card' style='border-left:5px solid #FFCC00;'><div class='metric-label'>📊 PROMEDIO ID</div><div class='metric-value'>{form_num(promedio_win_id)}</div><div class='metric-sub'><b>{superan_promedio}</b> activos superan el rendimiento medio.</div></div>", unsafe_allow_html=True)
 
             with tab2:
                 col1, col2 = st.columns(2)
@@ -197,10 +227,11 @@ if df_users is not None:
 
             with tab3:
                 st.subheader("🔎 Detalle de Máquinas sin Actividad")
-                if not ociosas.empty:
+                if not df_f.empty and not ociosas.empty:
                     det_ociosas = pd.merge(ociosas[['asset_Id']], df_f[['asset_Id', 'marca', 'modelo', 'juego']].drop_duplicates(), on='asset_Id')
                     st.table(det_ociosas)
-                else: st.success("Todos los activos seleccionados presentan actividad.")
+                else:
+                    st.success("Todos los activos seleccionados presentan actividad.")
 
         elif nav == "🔄 Analista Comparativo":
             st.title("⚖️ Diagnóstico Comparativo de Períodos")
@@ -223,58 +254,43 @@ if df_users is not None:
                     pa, pb = df_a.groupby('asset_Id')['win'].sum(), df_b.groupby('asset_Id')['win'].sum()
                     dif = (pa - pb).dropna().sort_values()
                     st.markdown(f"<div class='metric-card' style='border-left:5px solid #FF4B4B;'><div class='metric-label'>Asset Crítico</div><div class='metric-value'>ID {dif.index[0] if not dif.empty else 'N/A'}</div><div class='metric-sub'>Mayor caída de recaudación.</div></div>", unsafe_allow_html=True)
-                with v4: st.markdown(f"<div class='metric-card' style='border-left:5px solid #A0A0A0;'><div class='metric-label'>Eficiencia Comp.</div><div class='metric-value'>{(wa/ca*100 if ca>0 else 0):.1f}%</div><div class='metric-sub'>Hold Real del período actual.</div></div>", unsafe_allow_html=True)
-                
-                st.divider()
-                comp_plot_data = pd.DataFrame({
-                    'Métrica': ['Net Win', 'Net Win', 'Coin In', 'Coin In'],
-                    'Período': ['Actual (A)', 'Referencia (B)', 'Actual (A)', 'Referencia (B)'],
-                    'Valor': [wa, wb, ca, cb]
-                })
-                fig_comp = px.bar(comp_plot_data, x='Métrica', y='Valor', color='Período', barmode='group', template="plotly_dark", color_discrete_map={'Actual (A)': '#00D1FF', 'Referencia (B)': '#666666'})
-                st.plotly_chart(fig_comp, use_container_width=True)
+                with v4:
+                    st.markdown(f"<div class='metric-card' style='border-left:5px solid #A0A0A0;'><div class='metric-label'>Eficiencia Comp.</div><div class='metric-value'>{(wa/ca*100 if ca>0 else 0):.1f}%</div><div class='metric-sub'>Hold Real del período actual.</div></div>", unsafe_allow_html=True)
 
         elif nav == "📩 Consultas al Analista":
             st.title("📩 Centro de Consultas")
-            st.write("Canal de comunicación directa entre Sala y el Analista de Datos.")
             
-            # --- FORMULARIO DE ENVÍO (Solo si NO es analista o para todos si quieres) ---
-            if user_role != "Analista":
-                with st.expander("➕ Crear Nueva Consulta", expanded=True):
-                    with st.form("form_query"):
-                        cat = st.selectbox("Categoría", ["Anomalía de Rendimiento", "Duda Técnica Asset", "Solicitud de Informe", "Otro"])
+            if user_role == "Analista":
+                st.info("💡 **Modo Analista:** Responde a las inquietudes de sala.")
+                pendientes = df_feedback[df_feedback['Estado'] == 'Pendiente']
+                if not pendientes.empty:
+                    ticket_sel = st.selectbox("Ticket a responder", pendientes['ID'].tolist())
+                    row_sel = pendientes[pendientes['ID'] == ticket_sel].iloc[0]
+                    st.warning(f"**{row_sel['Usuario']} pregunta:** {row_sel['Consulta']}")
+                    resp_txt = st.text_area("Escribe tu respuesta:")
+                    if st.button("Enviar Respuesta"):
+                        if responder_consulta(ticket_sel, resp_txt):
+                            st.success("Respuesta guardada.")
+                            st.cache_data.clear()
+                            st.rerun()
+                else:
+                    st.success("No hay consultas pendientes.")
+            else:
+                with st.expander("➕ CREAR NUEVA CONSULTA", expanded=True):
+                    with st.form("form_q"):
+                        cat = st.selectbox("Categoría", ["Solicitud de Informe", "Anomalía detectada", "Duda de Asset", "Otro"])
                         duda = st.text_area("Explica tu duda o hallazgo:")
                         if st.form_submit_button("Enviar al Analista"):
                             if duda:
                                 if enviar_consulta(st.session_state['name'], cat, duda):
-                                    st.success("Consulta registrada correctamente.")
+                                    st.success("Consulta enviada con éxito.")
                                     st.cache_data.clear()
-                                else: st.error("Error al guardar.")
-                            else: st.warning("Escribe una consulta.")
+                                    st.rerun()
+                            else: st.error("Por favor escribe tu consulta.")
 
-            # --- VISTA PARA EL ANALISTA (Para responder) ---
-            if user_role == "Analista":
-                st.info("🛠️ **Modo Analista:** Tienes consultas pendientes de respuesta.")
-                pendientes = df_feedback[df_feedback['Estado'] == 'Pendiente']
-                if not pendientes.empty:
-                    ticket_sel = st.selectbox("Seleccionar Ticket para responder", pendientes['ID'].tolist())
-                    row_sel = pendientes[pendientes['ID'] == ticket_sel].iloc[0]
-                    st.write(f"**Pregunta de {row_sel['Usuario']}:** {row_sel['Consulta']}")
-                    resp_txt = st.text_area("Tu respuesta técnica:")
-                    if st.button("Publicar Respuesta"):
-                        if responder_consulta(ticket_sel, resp_txt):
-                            st.success("Respuesta enviada.")
-                            st.cache_data.clear()
-                            st.rerun()
-                else:
-                    st.success("No hay consultas pendientes. ¡Buen trabajo!")
-
-            # --- HISTORIAL GENERAL ---
             st.subheader("📋 Historial de Consultas")
             if not df_feedback.empty:
-                # Mostrar tabla con estilo
-                df_viz = df_feedback.sort_values('Fecha', ascending=False)
-                st.dataframe(df_viz, use_container_width=True, hide_index=True)
+                st.dataframe(df_feedback.sort_values("Fecha", ascending=False), use_container_width=True, hide_index=True)
             else:
                 st.write("Aún no hay consultas en el historial.")
 
@@ -283,4 +299,4 @@ if df_users is not None:
             st.dataframe(df_users[['nombre', 'usuario', 'rol', 'password']], use_container_width=True)
 
     elif st.session_state.get("authentication_status") is False:
-        st.error('Credenciales incorrectas')
+        st.error('Credenciales incorrectas')    
