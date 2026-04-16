@@ -93,57 +93,94 @@ def load_all_data():
 
 df_slots, df_users, df_feedback = load_all_data()
 
-# --- 3. ANALISTA LÓGICO (SIN COSTO) ---
+# --- 3. ANALISTA LÓGICO MEJORADO ---
 def get_logic_analysis(user_query, df_f):
     """
-    Simula una IA analizando los datos actuales sin usar APIs externas.
-    Detecta palabras clave y calcula métricas en tiempo real.
+    Motor analítico que procesa los datos filtrados y genera diagnósticos inteligentes.
     """
+    if df_f.empty:
+        return "No hay datos suficientes para realizar un análisis. Por favor, ajusta los filtros."
+
     query = user_query.lower()
     
-    # Cálculos base sobre los datos filtrados
+    # 1. Métricas Base
     total_win = df_f['win'].sum()
     total_coin = df_f['coin_in'].sum()
+    total_jackpot = df_f['jackpot'].sum() if 'jackpot' in df_f.columns else 0
     hold = (total_win / total_coin * 100) if total_coin > 0 else 0
-    assets_count = len(df_f['asset_Id'].unique())
+    assets_unique = df_f['asset_Id'].unique()
+    assets_count = len(assets_unique)
     
-    # Identificar mejores y peores
-    by_asset = df_f.groupby('asset_Id')['win'].sum().sort_values(ascending=False)
-    top_asset = by_asset.index[0] if not by_asset.empty else "N/A"
-    top_win = by_asset.iloc[0] if not by_asset.empty else 0
+    # 2. Análisis por Máquina
+    by_asset = df_f.groupby('asset_Id').agg({'win': 'sum', 'coin_in': 'sum'}).reset_index()
+    by_asset['hold'] = (by_asset['win'] / by_asset['coin_in'] * 100).fillna(0)
     
-    low_hold_assets = df_f.groupby('asset_Id').apply(lambda x: (x['win'].sum()/x['coin_in'].sum()*100) if x['coin_in'].sum() > 0 else 0)
-    critical_assets = low_hold_assets[low_hold_assets < 3].index.tolist()
+    top_performer = by_asset.sort_values('win', ascending=False).iloc[0]
+    critical_hold = by_asset[by_asset['hold'] < 3.0]
+    high_hold = by_asset[by_asset['hold'] > 15.0]
 
-    # Lógica de respuesta por intención
-    if any(word in query for word in ["anomalía", "error", "problema", "mal", "crítico"]):
-        resp = f"🔍 **Informe de Anomalías:** He detectado que de los {assets_count} activos analizados, "
-        if critical_assets:
-            resp += f"hay **{len(critical_assets)} máquinas** con un Hold peligrosamente bajo (menor al 3%). "
-            resp += f"Recomiendo inspeccionar los Assets: {', '.join(map(str, critical_assets[:5]))}."
-        else:
-            resp += "el rendimiento general es estable. El Hold promedio está en un saludable " + f"{hold:.2f}%."
+    # 3. Tendencia Temporal (Si hay más de 1 día)
+    fechas = sorted(df_f['fecha'].unique())
+    tendencia = ""
+    if len(fechas) > 1:
+        win_primera = df_f[df_f['fecha'] == fechas[0]]['win'].sum()
+        win_ultima = df_f[df_f['fecha'] == fechas[-1]]['win'].sum()
+        var = ((win_ultima - win_primera) / win_primera * 100) if win_primera > 0 else 0
+        status_trend = "crecimiento" if var > 0 else "caída"
+        tendencia = f"He observado una **{status_trend} del {abs(var):.1f}%** en el Win diario entre el inicio y el fin del periodo."
+
+    # LÓGICA DE RESPUESTA SEGÚN INTENCIÓN
+    
+    # Intención: Anomalías o Problemas
+    if any(word in query for word in ["anomalía", "error", "problema", "mal", "crítico", "baja"]):
+        resp = f"🔍 **Diagnóstico de Anomalías:**\n\n"
+        if not critical_assets.empty:
+            resp += f"⚠️ Se detectaron **{len(critical_hold)} máquinas** con un Hold < 3%. Destacan los Assets: {', '.join(map(str, critical_hold['asset_Id'].tolist()[:3]))}. Esto podría indicar un Jackpot pagado recientemente o un desajuste en el porcentaje.\n"
+        
+        if total_coin < (df_slots['coin_in'].mean() * assets_count):
+            resp += f"📉 El volumen de apuestas (Coin In) está por debajo del promedio histórico de la sala. Sugiero revisar el tráfico de clientes.\n"
+        
+        if not resp.count("\n") > 2:
+            resp += "No se detectan comportamientos fuera de norma. La sala opera con un Hold estable de " + f"{hold:.2f}%."
         return resp
 
-    elif any(word in query for word in ["mejor", "ganancia", "top", "máquina", "ranking"]):
-        return (f"🏆 **Ranking de Rendimiento:** La máquina con mayor recaudación en este periodo es la **ID {top_asset}**, "
-                f"con un Net Win de {form_num(top_win)}. "
-                f"Esto representa un impacto significativo sobre el total de {form_num(total_win)} de la sala.")
+    # Intención: Rendimiento o Ranking
+    elif any(word in query for word in ["mejor", "ranking", "top", "ganancia", "rendimiento"]):
+        resp = f"🏆 **Análisis de Rendimiento:**\n\n"
+        resp += f"La máquina estrella es la **ID {top_performer['asset_Id']}**, con una recaudación de {form_num(top_performer['win'])} y un Hold del {top_performer['hold']:.1f}%.\n"
+        
+        # Juego con más Coin In
+        if 'juego' in df_f.columns:
+            top_juego = df_f.groupby('juego')['coin_in'].sum().sort_values(ascending=False).index[0]
+            resp += f"El título más jugado en este segmento es **{top_juego}**, traccionando la mayor parte del tráfico.\n"
+        
+        resp += f"\n{tendencia}"
+        return resp
 
-    elif any(word in query for word in ["hold", "porcentaje", "eficiencia"]):
-        status = "dentro del rango esperado" if 5 <= hold <= 12 else "fuera de los parámetros ideales"
-        return (f"📊 **Análisis de Eficiencia:** El Hold real actual es del **{hold:.2f}%**. "
-                f"Este valor se encuentra {status}. "
-                f"Recuerda que el Coin In total analizado es de {form_num(total_coin)}.")
+    # Intención: Hold o Eficiencia
+    elif any(word in query for word in ["hold", "porcentaje", "eficiencia", "matemática"]):
+        eval_hold = "Excelente" if 7 <= hold <= 11 else "Revisar"
+        resp = f"📊 **Auditoría de Hold ({eval_hold}):**\n\n"
+        resp += f"El Hold real consolidado es del **{hold:.2f}%**.\n"
+        resp += f"- Coin In: {form_num(total_coin)}\n"
+        resp += f"- Win: {form_num(total_win)}\n"
+        if total_jackpot > 0:
+            resp += f"- Impacto Jackpots: {form_num(total_jackpot)} (reducen el Win neto).\n"
+        
+        if not high_hold.empty:
+            resp += f"\n💡 Nota: Hay {len(high_hold)} máquinas con Hold > 15%, lo que podría afectar la permanencia del cliente a largo plazo."
+        return resp
 
+    # Respuesta General Inteligente (Resumen Ejecutivo)
     else:
-        # Respuesta genérica inteligente
-        return (f"👋 Hola, soy tu Analista VDU. Basado en los filtros actuales:\n\n"
-                f"- Analizo **{assets_count}** activos.\n"
-                f"- El Net Win acumulado es **{form_num(total_win)}**.\n"
-                f"- El tráfico (Coin In) es de **{form_num(total_coin)}**.\n"
-                f"- El Hold promedio es **{hold:.2f}%**.\n\n"
-                f"¿Deseas que profundice en alguna máquina o anomalía específica?")
+        resp = f"👋 **Resumen Ejecutivo de Sala:**\n\n"
+        resp += f"Actualmente analizo **{assets_count} activos**. La sala presenta un Win total de **{form_num(total_win)}**.\n\n"
+        resp += f"**Indicadores Clave:**\n"
+        resp += f"- Hold Promedio: `{hold:.2f}%`\n"
+        resp += f"- Máquina Líder: `ID {top_performer['asset_Id']}`\n"
+        resp += f"- Estado de Tráfico: {'Estable' if total_coin > 0 else 'Sin datos'}\n\n"
+        resp += f"¿Deseas un informe detallado sobre **anomalías**, **ranking de máquinas** o **eficiencia de hold**?"
+        return resp
 
 # --- 4. FUNCIONES DE ESCRITURA ---
 def enviar_consulta_automatica(usuario, categoria, texto, ai_resp):
@@ -157,7 +194,6 @@ def enviar_consulta_automatica(usuario, categoria, texto, ai_resp):
         nuevo_id = f"IA-{datetime.now().strftime('%d%H%M%S')}"
         fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
         
-        # Guardar en Sheet
         sheet.append_row([nuevo_id, fecha, usuario, categoria, texto, ai_resp, "Finalizado"])
         return True
     except Exception as e:
@@ -183,12 +219,12 @@ if df_users is not None:
             st.write("")
             authenticator.logout('Cerrar Sesión')
 
-        # Aplicar filtros globales para que el bot los use
-        df_f_global = df_slots.copy()
+        # Filtros globales (inicializados con todos los datos)
+        if 'filtered_df' not in st.session_state:
+            st.session_state['filtered_df'] = df_slots.copy()
 
         if nav == "📊 Dashboard de Sala":
             st.title("Dashboard Fuente Mayor VDU")
-            # --- FILTROS ---
             with st.container(border=True):
                 r1, r2 = st.columns([1, 3])
                 f_rango = r1.date_input("📅 Ventana Temporal", [df_slots['fecha'].min(), df_slots['fecha'].max()])
@@ -198,17 +234,17 @@ if df_users is not None:
                 f_modelo = c3.multiselect("📦 Modelo", sorted(df_slots['modelo'].unique()))
                 f_juego = c4.multiselect("🎮 Juego", sorted(df_slots['juego'].unique()))
             
+            df_f = df_slots.copy()
             if len(f_rango) == 2:
-                df_f_global = df_f_global[(df_f_global['fecha'] >= f_rango[0]) & (df_f_global['fecha'] <= f_rango[1])]
-            if f_id: df_f_global = df_f_global[df_f_global['asset_Id'].isin(f_id)]
-            if f_marca: df_f_global = df_f_global[df_f_global['marca'].isin(f_marca)]
-            if f_modelo: df_f_global = df_f_global[df_f_global['modelo'].isin(f_modelo)]
-            if f_juego: df_f_global = df_f_global[df_f_global['juego'].isin(f_juego)]
+                df_f = df_f[(df_f['fecha'] >= f_rango[0]) & (df_f['fecha'] <= f_rango[1])]
+            if f_id: df_f = df_f[df_f['asset_Id'].isin(f_id)]
+            if f_marca: df_f = df_f[df_f['marca'].isin(f_marca)]
+            if f_modelo: df_f = df_f[df_f['modelo'].isin(f_modelo)]
+            if f_juego: df_f = df_f[df_f['juego'].isin(f_juego)]
             
-            # Guardar df_f_global en session_state para el bot
-            st.session_state['filtered_df'] = df_f_global
+            st.session_state['filtered_df'] = df_f
 
-            wt, ct = df_f_global['win'].sum(), df_f_global['coin_in'].sum()
+            wt, ct = df_f['win'].sum(), df_f['coin_in'].sum()
             ht = (wt/ct*100) if ct > 0 else 0
             
             k1, k2, k3 = st.columns(3)
@@ -216,44 +252,39 @@ if df_users is not None:
             with k2: st.markdown(f"<div class='main-kpi-label'>COIN IN</div><div class='main-kpi-val'>{form_num(ct)}</div>", unsafe_allow_html=True)
             with k3: st.markdown(f"<div class='main-kpi-label'>HOLD REAL %</div><div class='main-kpi-val'>{ht:.2f}%</div>", unsafe_allow_html=True)
 
-            st.plotly_chart(px.area(df_f_global.groupby('fecha')[['win', 'coin_in']].sum().reset_index(), x='fecha', y=['win', 'coin_in'], template="plotly_dark", color_discrete_sequence=['#00D1FF', '#FF4B4B']), use_container_width=True)
+            st.plotly_chart(px.area(df_f.groupby('fecha')[['win', 'coin_in']].sum().reset_index(), x='fecha', y=['win', 'coin_in'], template="plotly_dark", color_discrete_sequence=['#00D1FF', '#FF4B4B']), use_container_width=True)
 
         elif nav == "🔄 Analista Comparativo":
             st.title("⚖️ Diagnóstico Comparativo")
-            st.info("Compara dos periodos para identificar desviaciones.")
+            st.info("Utilice esta sección para medir variaciones entre periodos.")
 
         elif nav == "🤖 Consultar al Bot":
-            st.title("🤖 Analista de Sala Directo")
-            st.markdown("### Consultas basadas en Datos Reales")
-            st.caption("He desactivado la dependencia de servicios externos para garantizar respuestas inmediatas y gratuitas.")
+            st.title("🤖 Analista de Sala Inteligente")
+            st.markdown("### ¿Qué deseas auditar hoy?")
+            st.caption("Analizo tendencias, anomalías y rankings basándome en los filtros de tu Dashboard.")
             
-            # Recuperar datos filtrados o usar todos si no hay
             df_analizar = st.session_state.get('filtered_df', df_slots)
 
             with st.container(border=True):
                 with st.form("bot_form"):
-                    pregunta = st.text_input("Haz una pregunta sobre los datos actuales:", placeholder="Ej: ¿Qué anomalías hay? o ¿Cuál es la mejor máquina?")
-                    submit = st.form_submit_button("Analizar Ahora")
+                    pregunta = st.text_input("Haz una consulta técnica:", placeholder="Ej: ¿Qué anomalías hay? / Ranking de máquinas / Informe de Hold")
+                    submit = st.form_submit_button("Analizar Datos")
                     
                     if submit and pregunta:
-                        with st.spinner("Procesando lógica de datos..."):
-                            # Usamos el motor lógico local
-                            respuesta_logica = get_logic_analysis(pregunta, df_analizar)
-                            
-                            # Guardar en Google Sheets para auditoría
-                            enviar_consulta_automatica(st.session_state['name'], "Análisis Local", pregunta, respuesta_logica)
-                            
-                            st.markdown(f"<div class='bot-response'><b>🤖 Analista VDU:</b><br><br>{respuesta_logica}</div>", unsafe_allow_html=True)
+                        with st.spinner("Procesando auditoría de datos..."):
+                            respuesta = get_logic_analysis(pregunta, df_analizar)
+                            enviar_consulta_automatica(st.session_state['name'], "Análisis Inteligente", pregunta, respuesta)
+                            st.markdown(f"<div class='bot-response'><b>🤖 Analista VDU:</b><br><br>{respuesta}</div>", unsafe_allow_html=True)
                             st.cache_data.clear()
 
             st.divider()
-            st.subheader("📋 Historial de Consultas")
+            st.subheader("📋 Registro de Análisis")
             _, _, df_feedback_updated = load_all_data()
             if not df_feedback_updated.empty:
                 st.dataframe(df_feedback_updated.sort_values("Fecha", ascending=False), use_container_width=True, hide_index=True)
 
         elif nav == "👤 Gestión Usuarios":
-            st.title("👤 Configuración de Usuarios")
+            st.title("👤 Administración")
             st.dataframe(df_users[['nombre', 'usuario', 'rol']], use_container_width=True)
 
     elif st.session_state.get("authentication_status") is False:
