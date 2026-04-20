@@ -40,7 +40,7 @@ def form_num(valor):
 # IDs de los Libros de Google Sheets
 ID_CONFIGURACION = "1W_68ToMyy_nu1oPH7ePFj74_vc1op5bGiFoP4KtaY0I"
 ID_DATOS_2026 = "1ZYn6foApzeEeKg_qKzW9faQFjBPXHoc8ffB_CeZ3f_s"
-ID_DATOS_2025 = "1aAl_PX1wpBWgTu9bLc81Wn57jSyt8Kqfwm4B4Fsa1W0" # Nueva base 2025
+ID_DATOS_2025 = "1aAl_PX1wpBWgTu9bLc81Wn57jSyt8Kqfwm4B4Fsa1W0"
 
 # --- 2. MOTOR DE DATOS ---
 @st.cache_data(ttl=60)
@@ -55,29 +55,32 @@ def load_all_data():
         sheet_u = client.open_by_key(ID_CONFIGURACION).worksheet("Usuarios")
         df_u = pd.DataFrame(sheet_u.get_all_records())
         
-        # 2. Función para limpiar y procesar hojas de datos
-        def get_cleaned_df(book_id, sheet_name):
+        # 2. Función para extraer específicamente la hoja "Cubo"
+        def get_cubo_data(book_id):
             try:
-                sheet = client.open_by_key(book_id).worksheet(sheet_name)
+                # Se fuerza la búsqueda de la pestaña "Cubo"
+                sheet = client.open_by_key(book_id).worksheet("Cubo")
                 data = sheet.get_all_values()
+                if not data:
+                    return pd.DataFrame()
+                
                 df = pd.DataFrame(data[1:], columns=data[0])
-                # Limpiar columnas vacías
-                df = df.loc[:, df.columns.str.contains('^$|Unnamed') == False]
-                # Procesar fecha
+                # Limpiar columnas sin nombre o vacías
+                df = df.loc[:, ~df.columns.str.contains('^$|Unnamed', case=False, na=False)]
+                # Convertir fechas (formato esperado DD/MM/YYYY)
                 df['fecha'] = pd.to_datetime(df['fecha'], dayfirst=True, errors='coerce').dt.date
                 return df.dropna(subset=['fecha'])
             except Exception as e:
-                st.warning(f"No se pudo cargar la hoja {sheet_name} del libro {book_id}: {e}")
+                st.warning(f"Aviso: No se encontró la hoja 'Cubo' en el libro {book_id}. Error: {e}")
                 return pd.DataFrame()
 
-        # 3. Cargar datos de ambos años
-        df_2026 = get_cleaned_df(ID_DATOS_2026, "Cubo")
-        df_2025 = get_cleaned_df(ID_DATOS_2025, "Cubo") # Asumiendo que la hoja se llama "Cubo"
+        # 3. Cargar y Unificar
+        df_2025 = get_cubo_data(ID_DATOS_2025)
+        df_2026 = get_cubo_data(ID_DATOS_2026)
         
-        # 4. Unificar Bases
         df_s = pd.concat([df_2025, df_2026], ignore_index=True)
         
-        # 5. Limpieza de valores numéricos
+        # 4. Limpieza de valores numéricos
         for col in ['coin_in', 'win', 'jackpot']:
             if col in df_s.columns:
                 def clean_currency(x):
@@ -93,7 +96,7 @@ def load_all_data():
             
         return df_s, df_u
     except Exception as e:
-        st.error(f"Error de sincronización general: {e}")
+        st.error(f"Error crítico de sincronización: {e}")
         return None, None
 
 df_slots, df_users = load_all_data()
@@ -120,11 +123,9 @@ if df_users is not None:
         if nav == "📊 Dashboard de Sala":
             st.title("Dashboard Fuente Mayor VDU")
             
-            # Verificación de datos cargados
             if df_slots is not None and not df_slots.empty:
                 with st.container(border=True):
                     r1, r2 = st.columns([1, 3])
-                    # El selector de fecha ahora detecta automáticamente el rango desde 2025 hasta 2026
                     f_rango = r1.date_input("📅 Ventana Temporal", [df_slots['fecha'].min(), df_slots['fecha'].max()])
                     
                     c1, c2, c3, c4 = st.columns(4)
@@ -151,11 +152,11 @@ if df_users is not None:
 
                 st.plotly_chart(px.area(df_f.groupby('fecha')[['win', 'coin_in']].sum().reset_index(), x='fecha', y=['win', 'coin_in'], template="plotly_dark", color_discrete_sequence=['#00D1FF', '#FF4B4B']), use_container_width=True)
             else:
-                st.error("No se encontraron datos en las hojas de Cubo.")
+                st.error("Error: No se pudieron consolidar los datos de las pestañas 'Cubo'. Verifique los nombres de las hojas.")
 
         elif nav == "🔄 Analista Comparativo":
             st.title("⚖️ Diagnóstico Comparativo")
-            st.info("Ahora puede comparar datos de 2025 contra 2026 seleccionando los rangos correspondientes.")
+            st.info("Utilice esta sección para medir variaciones entre periodos (2025 vs 2026).")
 
         elif nav == "👤 Gestión Usuarios":
             st.title("👤 Administración")
