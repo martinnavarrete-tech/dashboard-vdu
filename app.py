@@ -39,7 +39,7 @@ def form_num(valor):
     except:
         return "$ 0"
 
-# IDs de los Libros de Google Sheets
+# IDs de los Libros de Google Sheets proporcionados
 ID_CONFIGURACION = "1W_68ToMyy_nu1oPH7ePFj74_vc1op5bGiFoP4AtaY0I"
 ID_DATOS_2026 = "1ZYn6foApzeEeKg_qKzW9faQFjBPXHoc8ffB_CeZ3f_s"
 ID_DATOS_2025 = "1aAl_PX1wpBWgTu9bLc81Wn57jSyt8Kqfwm4B4Fsa1W0"
@@ -47,39 +47,23 @@ ID_DATOS_2025 = "1aAl_PX1wpBWgTu9bLc81Wn57jSyt8Kqfwm4B4Fsa1W0"
 # --- 2. MOTOR DE DATOS Y LIMPIEZA ---
 
 def clean_numeric_vdu(value):
-    """
-    Limpia strings numéricos de Google Sheets de forma ultra-robusta.
-    Maneja casos donde las comas se corrieron o los puntos se malinterpretan.
-    """
+    """Limpia strings numéricos de Google Sheets de forma robusta."""
     if value is None or value == "": return 0.0
     s = str(value).strip()
     if s.lower() in ["nan", "null", "none", "-"]: return 0.0
-    
-    # 1. Eliminar símbolos de moneda y espacios
     s = s.replace('$', '').replace(' ', '')
-    
-    # 2. Heurística para detectar separadores:
-    # Si hay puntos y comas (ej: 1.250,50) -> es formato latino.
     if '.' in s and ',' in s:
         s = s.replace('.', '').replace(',', '.')
-    # Si hay comas pero no puntos (ej: 1,250.00 o 1250,50)
     elif ',' in s:
         partes = s.split(',')
-        # Si la parte final tiene 2 o menos caracteres, probablemente es decimal (ej: 100,50)
         if len(partes[-1]) <= 2:
             s = s.replace(',', '.')
         else:
-            # Es un separador de miles (ej: 1,250)
             s = s.replace(',', '')
-    
-    # 3. Limpiar cualquier carácter que no sea dígito, signo negativo o punto
     s = re.sub(r'[^0-9.\-]', '', s)
-    
-    # Si después de limpiar hay múltiples puntos, conservar solo el último como decimal
     if s.count('.') > 1:
         partes = s.split('.')
         s = "".join(partes[:-1]) + "." + partes[-1]
-
     try:
         return float(s)
     except:
@@ -96,6 +80,8 @@ def load_all_data():
         # Cargar configuración de Usuarios
         sheet_u = client.open_by_key(ID_CONFIGURACION).worksheet("Usuarios")
         df_u = pd.DataFrame(sheet_u.get_all_records())
+        # Limpiar nombres de columnas en usuarios
+        df_u.columns = [str(c).strip() for c in df_u.columns]
         
         def get_cubo_data(book_id):
             try:
@@ -104,12 +90,17 @@ def load_all_data():
                 if not data or len(data) < 2: return pd.DataFrame()
                 
                 df = pd.DataFrame(data[1:], columns=data[0])
+                # LIMPIEZA CRÍTICA: Eliminar espacios en los nombres de las columnas
+                df.columns = [str(c).strip() for c in df.columns]
+                
+                # Filtrar columnas vacías
                 df = df.loc[:, ~df.columns.str.contains('^$|Unnamed', case=False, na=False)]
                 
                 # Conversión de fechas (DD/MM/YYYY)
                 df['fecha'] = pd.to_datetime(df['fecha'], dayfirst=True, errors='coerce').dt.date
                 return df.dropna(subset=['fecha'])
-            except Exception:
+            except Exception as e:
+                st.warning(f"Aviso: No se pudo leer la hoja 'Cubo' en {book_id}. Error: {e}")
                 return pd.DataFrame()
 
         # Unificar años 2025 y 2026
@@ -119,6 +110,20 @@ def load_all_data():
         
         if df_s.empty:
             return pd.DataFrame(), df_u
+
+        # Normalizar nombres de columnas clave para evitar KeyErrors
+        mapeo_columnas = {
+            'asset_Id': 'asset_Id',
+            'asset_id': 'asset_Id',
+            'Asset ID': 'asset_Id',
+            'marca': 'marca',
+            'modelo': 'modelo',
+            'juego': 'juego',
+            'win': 'win',
+            'coin_in': 'coin_in',
+            'jackpot': 'jackpot'
+        }
+        df_s = df_s.rename(columns=lambda x: mapeo_columnas.get(x.strip(), x.strip()))
 
         # Aplicar limpieza numérica a columnas críticas
         for col in ['coin_in', 'win', 'jackpot']:
@@ -138,9 +143,8 @@ def render_kpi_cards(df):
     if df.empty: return
     c1, c2, c3, c4 = st.columns(4)
     
-    # Cálculo de métricas
-    t_win = df['win'].sum()
-    t_ci = df['coin_in'].sum()
+    t_win = df['win'].sum() if 'win' in df.columns else 0
+    t_ci = df['coin_in'].sum() if 'coin_in' in df.columns else 0
     hold = (t_win / t_ci * 100) if t_ci > 0 else 0
     
     with c1:
@@ -150,16 +154,24 @@ def render_kpi_cards(df):
     with c3:
         st.markdown(f"<div class='metric-card'><div class='metric-label'>HOLD REAL %</div><div class='metric-value'>{hold:.2f}%</div><div class='metric-sub'>Retención sobre Coin In</div></div>", unsafe_allow_html=True)
     with c4:
-        # Asset con más Win
-        df_top = df.groupby('asset_Id')['win'].sum().reset_index()
-        top_asset = df_top.sort_values('win', ascending=False).iloc[0] if not df_top.empty else {"asset_Id": "N/A", "win": 0}
-        st.markdown(f"<div class='metric-card'><div class='metric-label'>TOP ASSET</div><div class='metric-value'>ID {top_asset['asset_Id']}</div><div class='metric-sub'>Líder en rendimiento</div></div>", unsafe_allow_html=True)
+        if 'asset_Id' in df.columns:
+            df_top = df.groupby('asset_Id')['win'].sum().reset_index()
+            top_asset = df_top.sort_values('win', ascending=False).iloc[0] if not df_top.empty else {"asset_Id": "N/A", "win": 0}
+            st.markdown(f"<div class='metric-card'><div class='metric-label'>TOP ASSET</div><div class='metric-value'>ID {top_asset['asset_Id']}</div><div class='metric-sub'>Líder en rendimiento</div></div>", unsafe_allow_html=True)
+        else:
+            st.markdown(f"<div class='metric-card'><div class='metric-label'>TOP ASSET</div><div class='metric-value'>N/D</div><div class='metric-sub'>Columna no hallada</div></div>", unsafe_allow_html=True)
 
 # --- 4. INTERFAZ Y NAVEGACIÓN ---
 
-if df_users is not None:
-    credentials = {"usernames": {u.lower(): {"name": r['nombre'], "password": str(r['password']), "role": r['rol']} 
-                   for u, r in df_users.set_index('usuario').iterrows()}}
+if df_users is not None and not df_users.empty:
+    # Asegurar que las columnas usuario, nombre, password y rol existan
+    try:
+        credentials = {"usernames": {str(u).lower(): {"name": r['nombre'], "password": str(r['password']), "role": r['rol']} 
+                       for u, r in df_users.set_index('usuario').iterrows()}}
+    except KeyError as e:
+        st.error(f"Error en la hoja de Usuarios: No se encuentra la columna {e}. Revise los encabezados.")
+        st.stop()
+        
     authenticator = stauth.Authenticate(credentials, "vdu_app", "auth_key", 30)
     authenticator.login(location='main')
 
@@ -172,46 +184,40 @@ if df_users is not None:
             st.divider()
             authenticator.logout('Cerrar Sesión', 'sidebar')
 
-        # --- SECCIÓN DASHBOARD PRINCIPAL ---
         if nav == "📊 Dashboard Principal":
             st.title("Dashboard Fuente Mayor VDU")
             
             if df_slots is not None and not df_slots.empty:
-                # Filtros en contenedor
                 with st.container(border=True):
                     f1, f2 = st.columns([1, 3])
-                    
-                    # PREVENCIÓN ERROR MIN/MAX (Empty sequence)
                     safe_min = df_slots['fecha'].min() if not df_slots['fecha'].empty else datetime.now().date()
                     safe_max = df_slots['fecha'].max() if not df_slots['fecha'].empty else datetime.now().date()
-                    
                     rango = f1.date_input("📅 Rango de Fechas", [safe_min, safe_max])
                     
                     c1, c2, c3, c4 = st.columns(4)
-                    f_id = c1.multiselect("🆔 Asset ID", sorted(df_slots['asset_Id'].unique()))
-                    f_marca = c2.multiselect("🎰 Marca", sorted(df_slots['marca'].unique()))
-                    f_modelo = c3.multiselect("📦 Modelo", sorted(df_slots['modelo'].unique()))
-                    f_juego = c4.multiselect("🎮 Juego", sorted(df_slots['juego'].unique()))
+                    f_id = c1.multiselect("🆔 Asset ID", sorted(df_slots['asset_Id'].unique())) if 'asset_Id' in df_slots.columns else []
+                    f_marca = c2.multiselect("🎰 Marca", sorted(df_slots['marca'].unique())) if 'marca' in df_slots.columns else []
+                    f_modelo = c3.multiselect("📦 Modelo", sorted(df_slots['modelo'].unique())) if 'modelo' in df_slots.columns else []
+                    f_juego = c4.multiselect("🎮 Juego", sorted(df_slots['juego'].unique())) if 'juego' in df_slots.columns else []
                 
-                # Aplicar Filtros
                 df_f = df_slots.copy()
                 if isinstance(rango, (list, tuple)) and len(rango) == 2:
                     df_f = df_f[(df_f['fecha'] >= rango[0]) & (df_f['fecha'] <= rango[1])]
                 
-                if f_id: df_f = df_f[df_f['asset_Id'].isin(f_id)]
-                if f_marca: df_f = df_f[df_f['marca'].isin(f_marca)]
-                if f_modelo: df_f = df_f[df_f['modelo'].isin(f_modelo)]
-                if f_juego: df_f = df_f[df_f['juego'].isin(f_juego)]
+                if f_id and 'asset_Id' in df_f.columns: df_f = df_f[df_f['asset_Id'].isin(f_id)]
+                if f_marca and 'marca' in df_f.columns: df_f = df_f[df_f['marca'].isin(f_marca)]
+                if f_modelo and 'modelo' in df_f.columns: df_f = df_f[df_f['modelo'].isin(f_modelo)]
+                if f_juego and 'juego' in df_f.columns: df_f = df_f[df_f['juego'].isin(f_juego)]
 
-                # Visualización
                 render_kpi_cards(df_f)
                 
                 tab_evol, tab_dist = st.tabs(["📈 Evolución", "📊 Distribución"])
                 
                 with tab_evol:
-                    df_daily = df_f.groupby('fecha')[['win', 'coin_in']].sum().reset_index()
-                    if not df_daily.empty:
-                        fig = px.area(df_daily, x='fecha', y=['win', 'coin_in'], 
+                    if not df_f.empty and 'fecha' in df_f.columns:
+                        cols_to_sum = [c for c in ['win', 'coin_in'] if c in df_f.columns]
+                        df_daily = df_f.groupby('fecha')[cols_to_sum].sum().reset_index()
+                        fig = px.area(df_daily, x='fecha', y=cols_to_sum, 
                                      template="plotly_dark", 
                                      color_discrete_map={"win": "#00D1FF", "coin_in": "#FF4B4B"},
                                      title="Win vs Coin In Diario")
@@ -220,49 +226,46 @@ if df_users is not None:
                 with tab_dist:
                     col_a, col_b = st.columns(2)
                     with col_a:
-                        df_m = df_f.groupby('marca')['win'].sum().reset_index()
-                        st.plotly_chart(px.pie(df_m, names='marca', values='win', title="Win por Marca", hole=0.4, template="plotly_dark"), use_container_width=True)
+                        if 'marca' in df_f.columns and 'win' in df_f.columns:
+                            df_m = df_f.groupby('marca')['win'].sum().reset_index()
+                            st.plotly_chart(px.pie(df_m, names='marca', values='win', title="Win por Marca", hole=0.4, template="plotly_dark"), use_container_width=True)
                     with col_b:
-                        df_mod = df_f.groupby('modelo')['win'].sum().reset_index().sort_values('win', ascending=False).head(10)
-                        st.plotly_chart(px.bar(df_mod, x='modelo', y='win', title="Top 10 Modelos (Win)", template="plotly_dark"), use_container_width=True)
+                        if 'modelo' in df_f.columns and 'win' in df_f.columns:
+                            df_mod = df_f.groupby('modelo')['win'].sum().reset_index().sort_values('win', ascending=False).head(10)
+                            st.plotly_chart(px.bar(df_mod, x='modelo', y='win', title="Top 10 Modelos (Win)", template="plotly_dark"), use_container_width=True)
             else:
-                st.warning("⚠️ No hay datos disponibles para mostrar.")
+                st.warning("⚠️ No hay datos disponibles para mostrar. Verifique la pestaña 'Cubo'.")
 
-        # --- SECCIÓN ANALISTA COMPARATIVO ---
         elif nav == "⚖️ Comparativo Años":
             st.title("⚖️ Diagnóstico de Variación")
             st.info("Compare el rendimiento entre dos periodos específicos.")
             
-            with st.container(border=True):
-                col1, col2 = st.columns(2)
-                f_max = df_slots['fecha'].max()
-                r_a = col1.date_input("Periodo A (Actual)", [f_max - timedelta(days=7), f_max])
-                r_b = col2.date_input("Periodo B (Anterior)", [f_max - timedelta(days=15), f_max - timedelta(days=8)])
-            
-            if len(r_a) == 2 and len(r_b) == 2:
-                df_a = df_slots[(df_slots['fecha'] >= r_a[0]) & (df_slots['fecha'] <= r_a[1])]
-                df_b = df_slots[(df_slots['fecha'] >= r_b[0]) & (df_slots['fecha'] <= r_b[1])]
+            if not df_slots.empty:
+                with st.container(border=True):
+                    col1, col2 = st.columns(2)
+                    f_max = df_slots['fecha'].max()
+                    r_a = col1.date_input("Periodo A (Actual)", [f_max - timedelta(days=7), f_max])
+                    r_b = col2.date_input("Periodo B (Anterior)", [f_max - timedelta(days=15), f_max - timedelta(days=8)])
                 
-                wa, wb = df_a['win'].sum(), df_b['win'].sum()
-                ca, cb = df_a['coin_in'].sum(), df_b['coin_in'].sum()
-                
-                diff_w = wa - wb
-                pct_w = (diff_w / wb * 100) if wb != 0 else 0
-                
-                k1, k2 = st.columns(2)
-                k1.metric("Variación Win", form_num(diff_w), f"{pct_w:.2f}%")
-                k2.metric("Variación Coin In", form_num(ca - cb), f"{((ca-cb)/cb*100 if cb!=0 else 0):.2f}%")
-                
-                st.write("### 🕵️ Diagnóstico del Auditor")
-                if pct_w > 0:
-                    st.success(f"El Win ha incrementado un {pct_w:.2f}% respecto al periodo anterior.")
-                else:
-                    st.error(f"Se detectó una caída del {abs(pct_w):.2f}% en el Win neto.")
+                if len(r_a) == 2 and len(r_b) == 2:
+                    df_a = df_slots[(df_slots['fecha'] >= r_a[0]) & (df_slots['fecha'] <= r_a[1])]
+                    df_b = df_slots[(df_slots['fecha'] >= r_b[0]) & (df_slots['fecha'] <= r_b[1])]
+                    
+                    wa, wb = df_a['win'].sum() if 'win' in df_a.columns else 0, df_b['win'].sum() if 'win' in df_b.columns else 0
+                    ca, cb = df_a['coin_in'].sum() if 'coin_in' in df_a.columns else 0, df_b['coin_in'].sum() if 'coin_in' in df_b.columns else 0
+                    
+                    diff_w = wa - wb
+                    pct_w = (diff_w / wb * 100) if wb != 0 else 0
+                    
+                    k1, k2 = st.columns(2)
+                    k1.metric("Variación Win", form_num(diff_w), f"{pct_w:.2f}%")
+                    k2.metric("Variación Coin In", form_num(ca - cb), f"{((ca-cb)/cb*100 if cb!=0 else 0):.2f}%")
 
-        # --- SECCIÓN GESTIÓN ---
         elif nav == "👤 Usuarios":
             st.title("Gestión de Acceso")
-            st.dataframe(df_users[['nombre', 'usuario', 'rol']], use_container_width=True)
+            st.dataframe(df_users, use_container_width=True)
 
     elif st.session_state.get("authentication_status") is False:
         st.error('Credenciales incorrectas. Verifique usuario y contraseña.')
+else:
+    st.error("No se pudo cargar la base de usuarios. Verifique la conexión con la hoja de Configuración.")
