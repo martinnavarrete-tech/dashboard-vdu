@@ -39,7 +39,7 @@ def form_num(valor):
         return "$ 0"
 
 # IDs de los Libros de Google Sheets
-ID_CONFIGURACION = "1W_68ToMyy_nu1oPH7ePFj74_vc1op5bGiFoP4AtaY0I"
+ID_CONFIGURACION = "1W_68ToMyy_nu1oPH7ePFj74_vc1op5bGiFoP4KtaY0I"
 ID_DATOS_2026 = "1ZYn6foApzeEeKg_qKzW9faQFjBPXHoc8ffB_CeZ3f_s"
 ID_DATOS_2025 = "1aAl_PX1wpBWgTu9bLc81Wn57jSyt8Kqfwm4B4Fsa1W0"
 
@@ -90,15 +90,13 @@ def render_auditor_cuadros(df):
     c1, c2, c3, c4 = st.columns(4)
     
     # 1. Máximo Rendimiento
-    df_assets = df.groupby('asset_Id')['win'].sum().reset_index()
-    if not df_assets.empty:
-        top_row = df_assets.sort_values('win', ascending=False).iloc[0]
-        with c1:
-            st.markdown(f"""<div class='metric-card'>
-                <div class='metric-label'>MÁXIMO RENDIMIENTO</div>
-                <div class='metric-value'>Asset {top_row['asset_Id']}</div>
-                <div class='metric-sub'>Generó {form_num(top_row['win'])} bajo los filtros actuales.</div>
-            </div>""", unsafe_allow_html=True)
+    top_row = df.groupby('asset_Id')['win'].sum().reset_index().sort_values('win', ascending=False).iloc[0]
+    with c1:
+        st.markdown(f"""<div class='metric-card'>
+            <div class='metric-label'>MÁXIMO RENDIMIENTO</div>
+            <div class='metric-value'>Asset {top_row['asset_Id']}</div>
+            <div class='metric-sub'>Generó {form_num(top_row['win'])} bajo los filtros actuales.</div>
+        </div>""", unsafe_allow_html=True)
 
     # 2. Eficiencia de Hold
     t_win, t_ci = df['win'].sum(), df['coin_in'].sum()
@@ -144,8 +142,10 @@ if df_users is not None:
             authenticator.logout('Cerrar Sesión')
 
         if nav == "📊 Dashboard":
+            # 1. TÍTULO
             st.title("Dashboard Fuente Mayor VDU")
 
+            # 2. FILTROS
             with st.container(border=True):
                 r1, r2 = st.columns([1, 3])
                 f_rango = r1.date_input("📅 Ventana Temporal", [df_slots['fecha'].min(), df_slots['fecha'].max()])
@@ -156,6 +156,7 @@ if df_users is not None:
                 f_modelo = c3.multiselect("📦 Modelo", sorted(df_slots['modelo'].unique()))
                 f_juego = c4.multiselect("🎮 Juego", sorted(df_slots['juego'].unique()))
             
+            # Aplicar filtros base
             df_f = df_slots.copy()
             if len(f_rango) == 2:
                 df_f = df_f[(df_f['fecha'] >= f_rango[0]) & (df_f['fecha'] <= f_rango[1])]
@@ -164,20 +165,23 @@ if df_users is not None:
             if f_modelo: df_f = df_f[df_f['modelo'].isin(f_modelo)]
             if f_juego: df_f = df_f[df_f['juego'].isin(f_juego)]
 
+            # 3. BOTONES DE CAMBIO DE VISTA (TABS)
             tab_main, tab_excep, tab_marca = st.tabs(["📉 Dashboard Principal", "⚠️ Excepciones", "🏷️ Comparativa Marca"])
 
             with tab_main:
+                # 4. CUADROS AUDITOR INTERNO
                 render_auditor_cuadros(df_f)
 
+                # 5. GRÁFICO (Evolución Área)
                 st.write("### 📈 Evolución Temporal (Win vs Coin In)")
                 df_daily = df_f.groupby('fecha')[['win', 'coin_in']].sum().reset_index()
-                if not df_daily.empty:
-                    fig = px.area(df_daily, x='fecha', y=['win', 'coin_in'], 
-                                 template="plotly_dark", 
-                                 color_discrete_map={"win": "#00D1FF", "coin_in": "#FF4B4B"},
-                                 labels={"value": "Monto", "fecha": "Fecha"})
-                    st.plotly_chart(fig, use_container_width=True)
+                fig = px.area(df_daily, x='fecha', y=['win', 'coin_in'], 
+                             template="plotly_dark", 
+                             color_discrete_map={"win": "#00D1FF", "coin_in": "#FF4B4B"},
+                             labels={"value": "Monto", "fecha": "Fecha"})
+                st.plotly_chart(fig, use_container_width=True)
 
+                # KPIs de resumen debajo del gráfico
                 k1, k2, k3 = st.columns(3)
                 with k1: st.metric("Win Total", form_num(df_f['win'].sum()))
                 with k2: st.metric("Coin In Total", form_num(df_f['coin_in'].sum()))
@@ -199,8 +203,7 @@ if df_users is not None:
             with tab_marca:
                 st.write("### 🏷️ Desempeño por Marca")
                 df_m = df_f.groupby('marca')['win'].sum().reset_index()
-                if not df_m.empty:
-                    st.plotly_chart(px.bar(df_m, x='marca', y='win', color='win', template="plotly_dark"), use_container_width=True)
+                st.plotly_chart(px.bar(df_m, x='marca', y='win', color='win', template="plotly_dark"), use_container_width=True)
 
         elif nav == "🔄 Analista Comparativo":
             st.title("⚖️ Diagnóstico Comparativo de Periodos")
@@ -222,6 +225,7 @@ if df_users is not None:
                     df_a = df_a[df_a['marca'].isin(f_comp_marca)]
                     df_b = df_b[df_b['marca'].isin(f_comp_marca)]
 
+                # Métricas Principales
                 wa, wb = df_a['win'].sum(), df_b['win'].sum()
                 ca, cb = df_a['coin_in'].sum(), df_b['coin_in'].sum()
                 
@@ -236,50 +240,39 @@ if df_users is not None:
                 k1.metric("Variación Win", form_num(diff_w), f"{pct_w:.2f}%")
                 k2.metric("Variación Coin In", form_num(diff_c), f"{pct_c:.2f}%")
 
-                # GRÁFICO COMPARATIVO MEJORADO
-                st.write("### 📊 Comparativa Visual por Marca (Win)")
-                m_a_plot = df_a.groupby('marca')['win'].sum().reset_index()
-                m_a_plot['Periodo'] = 'Periodo A (Actual)'
-                m_b_plot = df_b.groupby('marca')['win'].sum().reset_index()
-                m_b_plot['Periodo'] = 'Periodo B (Anterior)'
-                
-                df_plot = pd.concat([m_a_plot, m_b_plot])
-                if not df_plot.empty:
-                    fig_comp = px.bar(df_plot, x='marca', y='win', color='Periodo', barmode='group',
-                                     template="plotly_dark", color_discrete_map={'Periodo A (Actual)': '#00D1FF', 'Periodo B (Anterior)': '#777777'})
-                    st.plotly_chart(fig_comp, use_container_width=True)
-
-                # ANÁLISIS DETALLADO
+                # ANÁLISIS BIEN DETALLADO
                 st.write("---")
                 st.subheader("🕵️ Informe de Inteligencia Comparativa")
                 
+                # Análisis por Marcas
                 m_a = df_a.groupby('marca')[['win', 'coin_in']].sum()
                 m_b = df_b.groupby('marca')[['win', 'coin_in']].sum()
                 
+                # Unir marcas para comparar variaciones
                 m_comp = m_a.join(m_b, lsuffix='_A', rsuffix='_B', how='outer').fillna(0)
+                m_comp['diff_win'] = m_comp['win_A'] - m_comp['win_B']
+                m_comp['diff_ci'] = m_comp['coin_in_A'] - m_comp['coin_in_B']
                 
-                if not m_comp.empty:
-                    m_comp['diff_win'] = m_comp['win_A'] - m_comp['win_B']
-                    m_comp['diff_ci'] = m_comp['coin_in_A'] - m_comp['coin_in_B']
-                    
-                    top_win = m_comp.sort_values('diff_win', ascending=False).head(1)
-                    bot_win = m_comp.sort_values('diff_win', ascending=True).head(1)
-                    top_ci = m_comp.sort_values('diff_ci', ascending=False).head(1)
-                    bot_ci = m_comp.sort_values('diff_ci', ascending=True).head(1)
+                # Marcas ganadoras y perdedoras
+                top_win = m_comp.sort_values('diff_win', ascending=False).head(1)
+                bot_win = m_comp.sort_values('diff_win', ascending=True).head(1)
+                top_ci = m_comp.sort_values('diff_ci', ascending=False).head(1)
+                bot_ci = m_comp.sort_values('diff_ci', ascending=True).head(1)
 
-                    st.markdown(f"""
-                    <div class='analysis-box'>
-                        <b>Análisis de Rendimiento:</b><br>
-                        • La marca con mayor crecimiento en Win fue <b>{top_win.index[0]}</b> con un incremento de <span class='positive'>{form_num(top_win['diff_win'].values[0])}</span>.<br>
-                        • El mayor retroceso en Win se observó en <b>{bot_win.index[0]}</b> con una caída de <span class='negative'>{form_num(bot_win['diff_win'].values[0])}</span>.
-                    </div>
-                    <div class='analysis-box' style='border-left-color: #00D1FF'>
-                        <b>Análisis de Tráfico (Coin In):</b><br>
-                        • <b>{top_ci.index[0]}</b> lideró la subida de volumen de juego (+{form_num(top_ci['diff_ci'].values[0])} Coin In).<br>
-                        • Se detectó una pérdida significativa de volumen en <b>{bot_ci.index[0]}</b> (-{form_num(abs(bot_ci['diff_ci'].values[0]))} Coin In).
-                    </div>
-                    """, unsafe_allow_html=True)
+                st.markdown(f"""
+                <div class='analysis-box'>
+                    <b>Análisis de Rendimiento:</b><br>
+                    • La marca con mayor crecimiento en Win fue <b>{top_win.index[0]}</b> con un incremento de <span class='positive'>{form_num(top_win['diff_win'].values[0])}</span>.<br>
+                    • El mayor retroceso en Win se observó en <b>{bot_win.index[0]}</b> con una caída de <span class='negative'>{form_num(bot_win['diff_win'].values[0])}</span>.
+                </div>
+                <div class='analysis-box' style='border-left-color: #00D1FF'>
+                    <b>Análisis de Tráfico (Coin In):</b><br>
+                    • <b>{top_ci.index[0]}</b> lideró la subida de volumen de juego (+{form_num(top_ci['diff_ci'].values[0])} Coin In).<br>
+                    • Se detectó una pérdida significativa de volumen en <b>{bot_ci.index[0]}</b> (-{form_num(abs(bot_ci['diff_ci'].values[0]))} Coin In).
+                </div>
+                """, unsafe_allow_html=True)
 
+                # Diagnóstico Final
                 st.write("### 📜 Diagnóstico Final")
                 if pct_w > 0 and pct_c > 0:
                     st.success("Salud Positiva: El incremento en Win está respaldado por un aumento real en el volumen de juego (Coin In).")
@@ -289,8 +282,6 @@ if df_users is not None:
                     st.warning("Alerta de Pagos: El volumen de juego subió pero el Win bajó; es probable que se hayan pagado Jackpots importantes en este periodo.")
                 else:
                     st.error("Tendencia a la baja: Se observa una caída tanto en volumen de juego como en rendimiento neto.")
-            else:
-                st.info("Seleccione rangos de fechas válidos para ambos periodos para iniciar el análisis.")
 
         elif nav == "👤 Gestión":
             st.title("Gestión de Usuarios")
