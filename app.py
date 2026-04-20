@@ -39,7 +39,7 @@ def form_num(valor):
         return "$ 0"
 
 # IDs de los Libros de Google Sheets
-ID_CONFIGURACION = "1W_68ToMyy_nu1oPH7ePFj74_vc1op5bGiFoP4KtaY0I"
+ID_CONFIGURACION = "1W_68ToMyy_nu1oPH7ePFj74_vc1op5bGiFoP4AtaY0I"
 ID_DATOS_2026 = "1ZYn6foApzeEeKg_qKzW9faQFjBPXHoc8ffB_CeZ3f_s"
 ID_DATOS_2025 = "1aAl_PX1wpBWgTu9bLc81Wn57jSyt8Kqfwm4B4Fsa1W0"
 
@@ -208,6 +208,7 @@ if df_users is not None:
         elif nav == "🔄 Analista Comparativo":
             st.title("⚖️ Diagnóstico Comparativo de Periodos")
             
+            # FILTROS
             with st.container(border=True):
                 col1, col2 = st.columns(2)
                 with col1:
@@ -239,6 +240,18 @@ if df_users is not None:
                 k1, k2 = st.columns(2)
                 k1.metric("Variación Win", form_num(diff_w), f"{pct_w:.2f}%")
                 k2.metric("Variación Coin In", form_num(diff_c), f"{pct_c:.2f}%")
+
+                # GRÁFICO COMPARATIVO
+                st.write("### 📊 Comparativa Visual por Marca (Win)")
+                m_a_plot = df_a.groupby('marca')['win'].sum().reset_index()
+                m_a_plot['Periodo'] = 'Periodo A (Actual)'
+                m_b_plot = df_b.groupby('marca')['win'].sum().reset_index()
+                m_b_plot['Periodo'] = 'Periodo B (Anterior)'
+                
+                df_plot = pd.concat([m_a_plot, m_b_plot])
+                fig_comp = px.bar(df_plot, x='marca', y='win', color='Periodo', barmode='group',
+                                 template="plotly_dark", color_discrete_map={'Periodo A (Actual)': '#00D1FF', 'Periodo B (Anterior)': '#777777'})
+                st.plotly_chart(fig_comp, use_container_width=True)
 
                 # ANÁLISIS BIEN DETALLADO
                 st.write("---")
