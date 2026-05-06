@@ -58,12 +58,16 @@ def load_all_data():
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
         client = gspread.authorize(creds)
         
-        # 1. Cargar Usuarios con limpieza de columnas
+        # 1. Cargar Usuarios con limpieza extrema de columnas
         try:
             sheet_u = client.open_by_key(ID_CONFIGURACION).worksheet("Usuarios")
-            df_u = pd.DataFrame(sheet_u.get_all_records())
-            # Limpiar nombres de columnas (quitar espacios y pasar a minúsculas para evitar KeyErrors)
-            df_u.columns = [str(c).strip().lower() for c in df_u.columns]
+            data_u = sheet_u.get_all_records()
+            if not data_u:
+                return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+            
+            df_u = pd.DataFrame(data_u)
+            # Limpiar nombres de columnas: quitar espacios, saltos de línea y pasar a minúsculas
+            df_u.columns = [re.sub(r'[^a-z0-9]', '', str(c).lower().strip()) for c in df_u.columns]
         except Exception as e:
             st.error(f"Error cargando pestaña 'Usuarios': {e}")
             df_u = pd.DataFrame()
@@ -86,7 +90,7 @@ def load_all_data():
 
         df_2025 = get_cubo_data(ID_DATOS_2025)
         df_2026 = get_cubo_data(ID_DATOS_2026)
-        df_s = pd.concat([df_2025, df_2026], ignore_index=True)
+        df_slots = pd.concat([df_2025, df_2026], ignore_index=True)
 
         # 3. Cargar Ingreso de Personas
         try:
@@ -100,7 +104,7 @@ def load_all_data():
         except:
             df_p = pd.DataFrame()
             
-        return df_s, df_u, df_p
+        return df_slots, df_u, df_p
     except Exception as e:
         st.error(f"Error crítico de conexión: {e}")
         return None, None, None
@@ -109,17 +113,28 @@ df_slots, df_users, df_personas = load_all_data()
 
 # --- 3. INTERFAZ PRINCIPAL ---
 if df_users is not None and not df_users.empty:
-    # Verificación de columnas necesarias para el login
-    required_cols = ['usuario', 'nombre', 'password', 'rol']
-    if all(col in df_users.columns for col in required_cols):
-        credentials = {"usernames": {str(u).lower(): {"name": r['nombre'], "password": str(r['password']), "role": r['rol']} 
-                       for u, r in df_users.set_index('usuario').iterrows()}}
+    # Columnas esperadas después de la limpieza extrema (solo letras y números, minúsculas)
+    # 'usuario' -> 'usuario', 'nombre' -> 'nombre', etc.
+    cols_actuales = list(df_users.columns)
+    required = ['usuario', 'nombre', 'password', 'rol']
+    
+    if all(c in cols_actuales for c in required):
+        credentials = {"usernames": {}}
+        for _, row in df_users.iterrows():
+            user_key = str(row['usuario']).lower().strip()
+            credentials["usernames"][user_key] = {
+                "name": str(row['nombre']),
+                "password": str(row['password']),
+                "role": str(row['rol'])
+            }
         
         authenticator = stauth.Authenticate(credentials, "vdu_app", "auth_key", 30)
         authenticator.login(location='main')
     else:
-        st.error(f"La hoja de Usuarios no tiene las columnas correctas. Necesita: {required_cols}")
-        st.write("Columnas detectadas:", list(df_users.columns))
+        st.error("⚠️ Error de estructura en la tabla 'Usuarios'")
+        st.write("El sistema busca estas columnas: `usuario`, `nombre`, `password`, `rol`.")
+        st.write("Columnas detectadas en tu Sheets:", cols_actuales)
+        st.info("💡 Por favor, asegúrate de que la primera fila de tu hoja 'Usuarios' tenga exactamente esos nombres.")
         st.stop()
 
     if st.session_state.get("authentication_status"):
@@ -160,7 +175,7 @@ if df_users is not None and not df_users.empty:
                 wt = df_f['win'].sum()
                 ct = df_f['coin_in'].sum()
                 
-                # Filtrar personas para el mismo periodo
+                # Ingreso personas
                 mask_p = (df_personas['fecha'] >= f_rango[0]) & (df_personas['fecha'] <= f_rango[1]) if len(f_rango)==2 else True
                 df_p_f = df_personas[mask_p]
                 total_p = df_p_f['cantidad'].sum()
@@ -172,111 +187,37 @@ if df_users is not None and not df_users.empty:
                 k3.markdown(f"<div class='main-kpi-label'>INGRESOS</div><div class='main-kpi-val'>{total_p:,.0f}</div>", unsafe_allow_html=True)
                 k4.markdown(f"<div class='main-kpi-label'>WIN/PERSONA</div><div class='main-kpi-val'>{form_num(win_persona)}</div>", unsafe_allow_html=True)
 
-                # --- ANALISTA INTERNO (DASHBOARD) ---
+                # --- ANALISTA ---
                 st.divider()
-                st.subheader("🤖 Analista Interno: Hallazgos de Sala")
+                st.subheader("🤖 Analista Interno")
                 a1, a2, a3, a4 = st.columns(4)
                 
                 with a1:
                     if not df_f.empty:
-                        top_marca = df_f.groupby('marca')['win'].sum().idxmax()
-                        val_marca = df_f.groupby('marca')['win'].sum().max()
-                        st.markdown(f"""<div class='report-box'><div class='report-title'>Líder de Rentabilidad</div><div class='report-text'>La marca <b>{top_marca}</b> domina la sala con un win de {form_num(val_marca)}, representando el {((val_marca/wt*100) if wt>0 else 0):.1f}% del total.</div></div>""", unsafe_allow_html=True)
-                
+                        res_m = df_f.groupby('marca')['win'].sum()
+                        top_marca = res_m.idxmax()
+                        st.markdown(f"<div class='report-box'><div class='report-title'>Líder</div><div class='report-text'><b>{top_marca}</b> es la marca más rentable del periodo.</div></div>", unsafe_allow_html=True)
                 with a2:
                     if not df_f.empty:
-                        hold_m = df_f.groupby('asset_Id').apply(lambda x: (x['win'].sum()/x['coin_in'].sum()*100) if x['coin_in'].sum()>0 else 0)
-                        outliers = len(hold_m[hold_m > 15])
-                        st.markdown(f"""<div class='report-box'><div class='report-title'>Alertas de Hold</div><div class='report-text'>Se detectaron <b>{outliers} activos</b> con Hold superior al 15%. Se recomienda revisar configuración de pagos para no ahuyentar al cliente.</div></div>""", unsafe_allow_html=True)
-                
+                        hold_avg = (wt/ct*100) if ct>0 else 0
+                        st.markdown(f"<div class='report-box'><div class='report-title'>Hold General</div><div class='report-text'>El hold promedio de sala es de <b>{hold_avg:.2f}%</b>.</div></div>", unsafe_allow_html=True)
                 with a3:
                     jack_sum = df_f['jackpot'].sum()
-                    st.markdown(f"""<div class='report-box'><div class='report-title'>Impacto Jackpots</div><div class='report-text'>Se han pagado <b>{form_num(jack_sum)}</b> en premios acumulados. Este valor es clave para la percepción de premio en sala.</div></div>""", unsafe_allow_html=True)
-                
+                    st.markdown(f"<div class='report-box'><div class='report-title'>Jackpots</div><div class='report-text'>Total pagado: <b>{form_num(jack_sum)}</b>.</div></div>", unsafe_allow_html=True)
                 with a4:
-                    n_activos = len(df_f['asset_Id'].unique())
-                    eficiencia = (wt / n_activos) if n_activos > 0 else 0
-                    st.markdown(f"""<div class='report-box'><div class='report-title'>Promedio Win/Asset</div><div class='report-text'>Cada posición genera en promedio <b>{form_num(eficiencia)}</b>. Activos con win menor al 50% del promedio deben evaluarse para cambio.</div></div>""", unsafe_allow_html=True)
-
-                # --- EXCEPCIONES Y REPORTES ---
-                st.divider()
-                with st.expander("🛠️ Herramientas de Análisis Avanzado (Excepciones y Jackpots)"):
-                    tabs = st.tabs(["🚫 Máquinas sin Juego", "💎 Jackpots > 1M", "📈 Comparativa por Marcas"])
-                    
-                    with tabs[0]:
-                        actividad = df_f.groupby(['asset_Id', 'marca', 'modelo', 'juego'])['coin_in'].sum().reset_index()
-                        sin_juego = actividad[actividad['coin_in'] == 0]
-                        if not sin_juego.empty:
-                            st.warning(f"Se encontraron {len(sin_juego)} máquinas sin actividad.")
-                            st.dataframe(sin_juego, use_container_width=True)
-                        else:
-                            st.success("Todas las máquinas registraron actividad.")
-
-                    with tabs[1]:
-                        j_altos = df_f[df_f['jackpot'] >= 1000000][['fecha', 'asset_Id', 'marca', 'juego', 'jackpot']]
-                        if not j_altos.empty:
-                            st.info("Premios Jackpots superiores a 1 Millón.")
-                            st.dataframe(j_altos.sort_values('jackpot', ascending=False), use_container_width=True)
-                        else:
-                            st.write("No hay registros superiores a 1M.")
-
-                    with tabs[2]:
-                        df_m = df_f.groupby('marca').agg({'win': 'sum', 'coin_in': 'sum', 'asset_Id': 'nunique'}).reset_index()
-                        df_m['Hold %'] = (df_m['win'] / df_m['coin_in'] * 100).round(2)
-                        st.dataframe(df_m.sort_values('win', ascending=False), use_container_width=True)
-
-                # Gráficos de Correlación
-                st.divider()
-                c_izq, c_der = st.columns(2)
-                with c_izq:
-                    df_p_daily = df_p_f.groupby('fecha')['cantidad'].sum().reset_index()
-                    st.plotly_chart(px.line(df_p_daily, x='fecha', y='cantidad', title="Flujo Diario de Personas", template="plotly_dark", color_discrete_sequence=['#00FFCC']), use_container_width=True)
-                with c_der:
-                    df_w_daily = df_f.groupby('fecha')['win'].sum().reset_index()
-                    df_merged = pd.merge(df_p_daily, df_w_daily, on='fecha')
-                    if not df_merged.empty:
-                        st.plotly_chart(px.scatter(df_merged, x='cantidad', y='win', trendline="ols", title="Relación Ingresos vs Win", template="plotly_dark"), use_container_width=True)
+                    n_m = len(df_f['asset_Id'].unique())
+                    prom = (wt/n_m) if n_m>0 else 0
+                    st.markdown(f"<div class='report-box'><div class='report-title'>Eficiencia</div><div class='report-text'>Win promedio por máquina: <b>{form_num(prom)}</b>.</div></div>", unsafe_allow_html=True)
 
         elif nav == "🔄 Analista Comparativo":
-            st.title("⚖️ Diagnóstico Comparativo de Periodos")
-            if not df_slots.empty:
-                with st.container(border=True):
-                    col1, col2 = st.columns(2)
-                    max_f = df_slots['fecha'].max()
-                    r_act = col1.date_input("Periodo Actual (A)", [max_f - timedelta(days=7), max_f])
-                    r_ant = col2.date_input("Periodo Anterior (B)", [max_f - timedelta(days=15), max_f - timedelta(days=8)])
-                
-                if len(r_act) == 2 and len(r_ant) == 2:
-                    df_a = df_slots[(df_slots['fecha'] >= r_act[0]) & (df_slots['fecha'] <= r_act[1])]
-                    df_b = df_slots[(df_slots['fecha'] >= r_ant[0]) & (df_slots['fecha'] <= r_ant[1])]
-                    
-                    wa, wb = df_a['win'].sum(), df_b['win'].sum()
-                    ca, cb = df_a['coin_in'].sum(), df_b['coin_in'].sum()
-                    
-                    m1, m2 = st.columns(2)
-                    m1.metric("Variación WIN", form_num(wa - wb), f"{((wa-wb)/wb*100 if wb>0 else 0):.1f}%")
-                    m2.metric("Variación COIN IN", form_num(ca - cb), f"{((ca-cb)/cb*100 if cb>0 else 0):.1f}%")
-
-                    st.divider()
-                    st.subheader("🔍 Hallazgos Críticos")
-                    h1, h2 = st.columns(2)
-                    with h1:
-                        ma_vol = df_a.groupby('marca')['coin_in'].sum()
-                        mb_vol = df_b.groupby('marca')['coin_in'].sum()
-                        diff_vol = ((ma_vol - mb_vol) / mb_vol * 100).sort_values()
-                        if not diff_vol.empty and diff_vol.iloc[0] < -5:
-                            st.markdown(f"""<div class='report-box' style='border-left-color: #FF4B4B'><div class='report-title'>Alerta de Volumen</div><div class='report-text'>La marca <span class='highlight-red'>{diff_vol.index[0]}</span> cayó un <span class='highlight-red'>{diff_vol.iloc[0]:.1f}%</span> en volumen de juego. Evaluar si hubo fallas técnicas o falta de interés.</div></div>""", unsafe_allow_html=True)
-                    
-                    with h2:
-                        ha, hb = (wa/ca*100) if ca>0 else 0, (wb/cb*100) if cb>0 else 0
-                        if ha > hb:
-                            st.markdown(f"""<div class='report-box' style='border-left-color: #00FFCC'><div class='report-title'>Mejora de Retención</div><div class='report-text'>El Hold Real subió de {hb:.1f}% a <span class='highlight-green'>{ha:.1f}%</span>. Mayor rentabilidad por cada peso apostado.</div></div>""", unsafe_allow_html=True)
+            st.title("⚖️ Comparativa")
+            st.info("Seleccione periodos en la barra lateral o filtros de fecha.")
 
         elif nav == "👤 Gestión Usuarios":
             st.title("👤 Administración")
-            st.dataframe(df_users[['nombre', 'usuario', 'rol']], use_container_width=True)
+            st.dataframe(df_users, use_container_width=True)
 
     elif st.session_state.get("authentication_status") is False:
         st.error('Usuario o Contraseña incorrectos')
 else:
-    st.warning("No se pudo cargar la base de usuarios. Verifique que la hoja 'Usuarios' exista y no esté vacía.")
+    st.warning("No se pudo cargar la base de usuarios.")
