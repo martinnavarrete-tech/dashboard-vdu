@@ -58,10 +58,15 @@ def load_all_data():
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
         client = gspread.authorize(creds)
         
-        # 1. Cargar Usuarios
-        sheet_u = client.open_by_key(ID_CONFIGURACION).worksheet("Usuarios")
-        df_u = pd.DataFrame(sheet_u.get_all_records())
-        df_u.columns = [str(c).strip() for c in df_u.columns]
+        # 1. Cargar Usuarios con limpieza de columnas
+        try:
+            sheet_u = client.open_by_key(ID_CONFIGURACION).worksheet("Usuarios")
+            df_u = pd.DataFrame(sheet_u.get_all_records())
+            # Limpiar nombres de columnas (quitar espacios y pasar a minúsculas para evitar KeyErrors)
+            df_u.columns = [str(c).strip().lower() for c in df_u.columns]
+        except Exception as e:
+            st.error(f"Error cargando pestaña 'Usuarios': {e}")
+            df_u = pd.DataFrame()
         
         # 2. Función para extraer datos de Máquinas (Hoja Cubo)
         def get_cubo_data(book_id):
@@ -103,12 +108,19 @@ def load_all_data():
 df_slots, df_users, df_personas = load_all_data()
 
 # --- 3. INTERFAZ PRINCIPAL ---
-if df_users is not None:
-    credentials = {"usernames": {str(u).lower(): {"name": r['nombre'], "password": str(r['password']), "role": r['rol']} 
-                   for u, r in df_users.set_index('usuario').iterrows()}}
-    
-    authenticator = stauth.Authenticate(credentials, "vdu_app", "auth_key", 30)
-    authenticator.login(location='main')
+if df_users is not None and not df_users.empty:
+    # Verificación de columnas necesarias para el login
+    required_cols = ['usuario', 'nombre', 'password', 'rol']
+    if all(col in df_users.columns for col in required_cols):
+        credentials = {"usernames": {str(u).lower(): {"name": r['nombre'], "password": str(r['password']), "role": r['rol']} 
+                       for u, r in df_users.set_index('usuario').iterrows()}}
+        
+        authenticator = stauth.Authenticate(credentials, "vdu_app", "auth_key", 30)
+        authenticator.login(location='main')
+    else:
+        st.error(f"La hoja de Usuarios no tiene las columnas correctas. Necesita: {required_cols}")
+        st.write("Columnas detectadas:", list(df_users.columns))
+        st.stop()
 
     if st.session_state.get("authentication_status"):
         with st.sidebar:
@@ -147,7 +159,6 @@ if df_users is not None:
                 # KPIs Principales
                 wt = df_f['win'].sum()
                 ct = df_f['coin_in'].sum()
-                ht = (wt/ct*100) if ct > 0 else 0
                 
                 # Filtrar personas para el mismo periodo
                 mask_p = (df_personas['fecha'] >= f_rango[0]) & (df_personas['fecha'] <= f_rango[1]) if len(f_rango)==2 else True
@@ -167,15 +178,16 @@ if df_users is not None:
                 a1, a2, a3, a4 = st.columns(4)
                 
                 with a1:
-                    top_marca = df_f.groupby('marca')['win'].sum().idxmax()
-                    val_marca = df_f.groupby('marca')['win'].sum().max()
-                    st.markdown(f"""<div class='report-box'><div class='report-title'>Líder de Rentabilidad</div><div class='report-text'>La marca <b>{top_marca}</b> domina la sala con un win de {form_num(val_marca)}, representando el {((val_marca/wt*100) if wt>0 else 0):.1f}% del total.</div></div>""", unsafe_allow_html=True)
+                    if not df_f.empty:
+                        top_marca = df_f.groupby('marca')['win'].sum().idxmax()
+                        val_marca = df_f.groupby('marca')['win'].sum().max()
+                        st.markdown(f"""<div class='report-box'><div class='report-title'>Líder de Rentabilidad</div><div class='report-text'>La marca <b>{top_marca}</b> domina la sala con un win de {form_num(val_marca)}, representando el {((val_marca/wt*100) if wt>0 else 0):.1f}% del total.</div></div>""", unsafe_allow_html=True)
                 
                 with a2:
-                    # Cálculo de Hold por máquina
-                    hold_m = df_f.groupby('asset_Id').apply(lambda x: (x['win'].sum()/x['coin_in'].sum()*100) if x['coin_in'].sum()>0 else 0)
-                    outliers = len(hold_m[hold_m > 15])
-                    st.markdown(f"""<div class='report-box'><div class='report-title'>Alertas de Hold</div><div class='report-text'>Se detectaron <b>{outliers} activos</b> con Hold superior al 15%. Se recomienda revisar configuración de pagos para no ahuyentar al cliente.</div></div>""", unsafe_allow_html=True)
+                    if not df_f.empty:
+                        hold_m = df_f.groupby('asset_Id').apply(lambda x: (x['win'].sum()/x['coin_in'].sum()*100) if x['coin_in'].sum()>0 else 0)
+                        outliers = len(hold_m[hold_m > 15])
+                        st.markdown(f"""<div class='report-box'><div class='report-title'>Alertas de Hold</div><div class='report-text'>Se detectaron <b>{outliers} activos</b> con Hold superior al 15%. Se recomienda revisar configuración de pagos para no ahuyentar al cliente.</div></div>""", unsafe_allow_html=True)
                 
                 with a3:
                     jack_sum = df_f['jackpot'].sum()
@@ -213,7 +225,7 @@ if df_users is not None:
                         df_m['Hold %'] = (df_m['win'] / df_m['coin_in'] * 100).round(2)
                         st.dataframe(df_m.sort_values('win', ascending=False), use_container_width=True)
 
-                # Gráfico de Correlación Ingresos vs Win
+                # Gráficos de Correlación
                 st.divider()
                 c_izq, c_der = st.columns(2)
                 with c_izq:
@@ -222,7 +234,8 @@ if df_users is not None:
                 with c_der:
                     df_w_daily = df_f.groupby('fecha')['win'].sum().reset_index()
                     df_merged = pd.merge(df_p_daily, df_w_daily, on='fecha')
-                    st.plotly_chart(px.scatter(df_merged, x='cantidad', y='win', trendline="ols", title="Relación Ingresos vs Win", template="plotly_dark"), use_container_width=True)
+                    if not df_merged.empty:
+                        st.plotly_chart(px.scatter(df_merged, x='cantidad', y='win', trendline="ols", title="Relación Ingresos vs Win", template="plotly_dark"), use_container_width=True)
 
         elif nav == "🔄 Analista Comparativo":
             st.title("⚖️ Diagnóstico Comparativo de Periodos")
@@ -248,21 +261,16 @@ if df_users is not None:
                     st.subheader("🔍 Hallazgos Críticos")
                     h1, h2 = st.columns(2)
                     with h1:
-                        # Marcas con mayor caída de volumen
                         ma_vol = df_a.groupby('marca')['coin_in'].sum()
                         mb_vol = df_b.groupby('marca')['coin_in'].sum()
                         diff_vol = ((ma_vol - mb_vol) / mb_vol * 100).sort_values()
                         if not diff_vol.empty and diff_vol.iloc[0] < -5:
                             st.markdown(f"""<div class='report-box' style='border-left-color: #FF4B4B'><div class='report-title'>Alerta de Volumen</div><div class='report-text'>La marca <span class='highlight-red'>{diff_vol.index[0]}</span> cayó un <span class='highlight-red'>{diff_vol.iloc[0]:.1f}%</span> en volumen de juego. Evaluar si hubo fallas técnicas o falta de interés.</div></div>""", unsafe_allow_html=True)
-                        else:
-                            st.markdown(f"""<div class='report-box'><div class='report-title'>Estabilidad de Marcas</div><div class='report-text'>El volumen de las marcas principales se mantiene estable sin caídas significativas detectadas.</div></div>""", unsafe_allow_html=True)
                     
                     with h2:
                         ha, hb = (wa/ca*100) if ca>0 else 0, (wb/cb*100) if cb>0 else 0
                         if ha > hb:
-                            st.markdown(f"""<div class='report-box' style='border-left-color: #00FFCC'><div class='report-title'>Mejora de Retención</div><div class='report-text'>El Hold Real subió de {hb:.1f}% a <span class='highlight-green'>{ha:.1f}%</span>. Mayor rentabilidad por cada peso apostado en el periodo actual.</div></div>""", unsafe_allow_html=True)
-                        else:
-                            st.markdown(f"""<div class='report-box'><div class='report-title'>Análisis de Pago</div><div class='report-text'>El Hold bajó un {(hb-ha):.1f}%. Las máquinas están pagando más premios, lo cual puede atraer más volumen a largo plazo.</div></div>""", unsafe_allow_html=True)
+                            st.markdown(f"""<div class='report-box' style='border-left-color: #00FFCC'><div class='report-title'>Mejora de Retención</div><div class='report-text'>El Hold Real subió de {hb:.1f}% a <span class='highlight-green'>{ha:.1f}%</span>. Mayor rentabilidad por cada peso apostado.</div></div>""", unsafe_allow_html=True)
 
         elif nav == "👤 Gestión Usuarios":
             st.title("👤 Administración")
@@ -270,3 +278,5 @@ if df_users is not None:
 
     elif st.session_state.get("authentication_status") is False:
         st.error('Usuario o Contraseña incorrectos')
+else:
+    st.warning("No se pudo cargar la base de usuarios. Verifique que la hoja 'Usuarios' exista y no esté vacía.")
