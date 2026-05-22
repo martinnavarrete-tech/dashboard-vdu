@@ -149,7 +149,7 @@ def load_all_data():
         df_2026 = get_cubo_data(ID_DATOS_2026)
         df_s = pd.concat([df_2025, df_2026], ignore_index=True)
         
-        # 3. Asistencia (Corregido para extraer fechas con texto "mié, 01/01/2025" y limpiar números)
+        # 3. Asistencia / Ocupación (Corregido para mapear la columna 'ocupacion')
         try:
             sheet_p = client.open_by_key(ID_INGRESO_PERSONAS).get_worksheet(0)
             data_p = sheet_p.get_all_values()
@@ -157,20 +157,21 @@ def load_all_data():
                 df_p = pd.DataFrame(data_p[1:], columns=data_p[0])
                 df_p.columns = [str(c).strip().lower() for c in df_p.columns]
                 
-                if 'fecha' in df_p.columns and 'cantidad' in df_p.columns:
-                    df_p = df_p[['fecha', 'cantidad']]
+                # Buscamos 'fecha' y 'ocupacion' (o 'ocupación' con acento por las dudas)
+                col_ocupacion = None
+                for c in df_p.columns:
+                    if 'ocupacion' in c or 'ocupaci' in c:
+                        col_ocupacion = c
+                        break
+                
+                if 'fecha' in df_p.columns and col_ocupacion:
+                    df_p = df_p[['fecha', col_ocupacion]]
+                    df_p = df_p.rename(columns={col_ocupacion: 'cantidad'})
                     
-                    # Función para extraer sólo la fecha limpia usando expresiones regulares
-                    def clean_date_string(val):
-                        if not val: return None
-                        # Busca el patrón de una fecha estándar DD/MM/AAAA o similar
-                        match = re.search(r'(\d{1,2}/\d{1,2}/\d{4})', str(val))
-                        return match.group(1) if match else str(val).strip()
-
-                    df_p['fecha_limpia'] = df_p['fecha'].apply(clean_date_string)
-                    df_p['fecha'] = pd.to_datetime(df_p['fecha_limpia'], dayfirst=True, errors='coerce').dt.date
+                    # Al estar en formato fecha nativo en Sheets, to_datetime lo asimila sin problemas
+                    df_p['fecha'] = pd.to_datetime(df_p['fecha'], errors='coerce').dt.date
                     
-                    # Limpieza de strings numéricos con puntos (ej: "1.250" -> 1250)
+                    # Limpieza de texto sin formato (elimina puntos de miles para no confundirlos con decimales)
                     def clean_asistencia_num(val):
                         if not val or str(val).strip() == "": return 0.0
                         cleaned = re.sub(r'[^\d]', '', str(val))
@@ -281,7 +282,7 @@ if df_users is not None:
                 with k_col3:
                     st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Hold Real %</div><div class='kpi-value' style='color:#00ffcc;'>{ht:.2f}%</div></div>", unsafe_allow_html=True)
                 with k_col4:
-                    st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Ingresos / Tráfico</div><div class='kpi-value' style='color:#ff9f43;'>{asistencia:,.0f}</div><div class='kpi-subtext'>EFF: {form_num(win_persona)} x PAX</div></div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Ocupación / Tráfico</div><div class='kpi-value' style='color:#ff9f43;'>{asistencia:,.0f}</div><div class='kpi-subtext'>EFF: {form_num(win_persona)} x PAX</div></div>", unsafe_allow_html=True)
 
                 st.write("")
 
@@ -359,14 +360,14 @@ if df_users is not None:
 
                 with g_col2:
                     st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
-                    st.markdown("<div class='panel-header'>👥 Comportamiento de Asistencia (Ingresos)</div>", unsafe_allow_html=True)
+                    st.markdown("<div class='panel-header'>👥 Comportamiento de Asistencia (Ocupación)</div>", unsafe_allow_html=True)
                     if not df_p_f.empty:
                         df_p_daily = df_p_f.groupby('fecha')['cantidad'].sum().reset_index()
                         fig_pers = px.bar(df_p_daily, x='fecha', y='cantidad', template="plotly_dark", color_discrete_sequence=['#FF9F43'])
                         fig_pers.update_layout(margin=dict(l=10, r=10, t=5, b=5), height=220, xaxis_title=None, yaxis_title=None)
                         st.plotly_chart(fig_pers, use_container_width=True)
                     else:
-                        st.info("Sin datos de accesos en este rango.")
+                        st.info("Sin datos de ocupación en este rango.")
                     st.markdown("</div>", unsafe_allow_html=True)
             else:
                 st.error("Error al mapear la base de datos 'Cubo'.")
