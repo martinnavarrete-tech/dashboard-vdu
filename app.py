@@ -149,7 +149,7 @@ def load_all_data():
         df_2026 = get_cubo_data(ID_DATOS_2026)
         df_s = pd.concat([df_2025, df_2026], ignore_index=True)
         
-        # 3. Asistencia (Corregido para leer la primera hoja sin importar el nombre)
+        # 3. Asistencia (Corregido para sanitizar puntos contables de Google Sheets)
         try:
             sheet_p = client.open_by_key(ID_INGRESO_PERSONAS).get_worksheet(0)
             data_p = sheet_p.get_all_values()
@@ -160,7 +160,15 @@ def load_all_data():
                 if 'fecha' in df_p.columns and 'cantidad' in df_p.columns:
                     df_p = df_p[['fecha', 'cantidad']]
                     df_p['fecha'] = pd.to_datetime(df_p['fecha'], dayfirst=True, errors='coerce').dt.date
-                    df_p['cantidad'] = pd.to_numeric(df_p['cantidad'], errors='coerce').fillna(0)
+                    
+                    # Limpieza de strings con puntos (ej: "1.250" -> 1250)
+                    def clean_asistencia_num(val):
+                        if not val or str(val).strip() == "": return 0.0
+                        cleaned = re.sub(r'[^\d]', '', str(val)) # Remueve todo lo que no sea dígito puro
+                        try: return float(cleaned)
+                        except: return 0.0
+                        
+                    df_p['cantidad'] = df_p['cantidad'].apply(clean_asistencia_num)
                     df_p = df_p.dropna(subset=['fecha'])
                 else:
                     df_p = pd.DataFrame(columns=['fecha', 'cantidad'])
