@@ -149,17 +149,21 @@ def load_all_data():
         df_2026 = get_cubo_data(ID_DATOS_2026)
         df_s = pd.concat([df_2025, df_2026], ignore_index=True)
         
-        # 3. Asistencia
+        # 3. Asistencia (Corregido para leer la primera hoja sin importar el nombre)
         try:
-            sheet_p = client.open_by_key(ID_INGRESO_PERSONAS).worksheet("Cubo")
+            sheet_p = client.open_by_key(ID_INGRESO_PERSONAS).get_worksheet(0)
             data_p = sheet_p.get_all_values()
             if data_p and len(data_p) >= 2:
                 df_p = pd.DataFrame(data_p[1:], columns=data_p[0])
-                df_p.columns = [str(c).strip() for c in df_p.columns]
-                df_p = df_p.rename(columns={'FECHA': 'fecha', 'Fecha': 'fecha', 'CANTIDAD': 'cantidad', 'Cantidad': 'cantidad'})
-                df_p['fecha'] = pd.to_datetime(df_p['fecha'], dayfirst=True, errors='coerce').dt.date
-                df_p['cantidad'] = pd.to_numeric(df_p['cantidad'], errors='coerce').fillna(0)
-                df_p = df_p.dropna(subset=['fecha'])
+                df_p.columns = [str(c).strip().lower() for c in df_p.columns]
+                
+                if 'fecha' in df_p.columns and 'cantidad' in df_p.columns:
+                    df_p = df_p[['fecha', 'cantidad']]
+                    df_p['fecha'] = pd.to_datetime(df_p['fecha'], dayfirst=True, errors='coerce').dt.date
+                    df_p['cantidad'] = pd.to_numeric(df_p['cantidad'], errors='coerce').fillna(0)
+                    df_p = df_p.dropna(subset=['fecha'])
+                else:
+                    df_p = pd.DataFrame(columns=['fecha', 'cantidad'])
             else:
                 df_p = pd.DataFrame(columns=['fecha', 'cantidad'])
         except:
@@ -213,7 +217,7 @@ if df_users is not None:
             
             if df_slots is not None and not df_slots.empty:
                 
-                # --- FILA 1: BARRA DE FILTROS FLUIDA (TIPO BARRA DE HERRAMIENTAS) ---
+                # --- FILA 1: BARRA DE FILTROS FLUIDA ---
                 st.markdown("<div class='filter-bar'>", unsafe_allow_html=True)
                 f_col1, f_col2, f_col3, f_col4, f_col5 = st.columns([1.2, 1, 1, 1, 1])
                 
@@ -251,7 +255,7 @@ if df_users is not None:
                 asistencia = df_p_f['cantidad'].sum() if not df_p_f.empty else 0
                 win_persona = (wt / asistencia) if asistencia > 0 else 0
 
-                # --- FILA 2: PANEL DE CONTROL DE METRICAS (TODO EL ANCHO) ---
+                # --- FILA 2: PANEL DE CONTROL DE METRICAS ---
                 k_col1, k_col2, k_col3, k_col4 = st.columns(4)
                 with k_col1:
                     st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Net Win Total</div><div class='kpi-value'>{form_num(wt)}</div></div>", unsafe_allow_html=True)
@@ -319,7 +323,7 @@ if df_users is not None:
                     st.markdown(f"<div class='analyst-box'><div class='analyst-title'>Eficiencia Media</div><div class='analyst-text'>La media de rendimiento por terminal instalada se posiciona en <b>{form_num(eficiencia)}</b>.</div></div>", unsafe_allow_html=True)
                 st.markdown("</div>", unsafe_allow_html=True)
 
-                # --- FILA 5: GRÁFICOS INTERACTIVOS COMPACTOS (PARALELO) ---
+                # --- FILA 5: GRÁFICOS INTERACTIVOS COMPACTOS ---
                 g_col1, g_col2 = st.columns([2, 2])
 
                 with g_col1:
