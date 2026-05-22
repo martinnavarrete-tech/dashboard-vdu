@@ -25,18 +25,27 @@ st.markdown("""
     .metric-sub { font-size: 0.85rem; font-weight: 500; line-height: 1.3; }
     .report-box { 
         background-color: #161625; 
-        padding: 20px; 
-        border-radius: 10px; 
+        padding: 15px; 
+        border-radius: 8px; 
         border-left: 5px solid #00D1FF; 
-        margin-bottom: 20px;
-        min-height: 150px;
+        margin-bottom: 15px;
+        min-height: 130px;
     }
-    .report-title { color: #00D1FF; font-weight: bold; margin-bottom: 10px; text-transform: uppercase; font-size: 0.9rem; }
-    .report-text { color: #E0E0E0; font-size: 0.85rem; line-height: 1.4; }
-    .main-kpi-val { font-size: 2.8rem; font-weight: 800; color: #FFFFFF; line-height: 1.1; }
-    .main-kpi-label { font-size: 0.9rem; color: #A0A0A0; text-transform: uppercase; font-weight: bold; }
+    .report-title { color: #00D1FF; font-weight: bold; margin-bottom: 8px; text-transform: uppercase; font-size: 0.85rem; }
+    .report-text { color: #E0E0E0; font-size: 0.8rem; line-height: 1.4; }
+    .main-kpi-val { font-size: 2.2rem; font-weight: 800; color: #FFFFFF; line-height: 1.1; }
+    .main-kpi-label { font-size: 0.8rem; color: #A0A0A0; text-transform: uppercase; font-weight: bold; }
     .highlight-red { color: #FF4B4B; font-weight: bold; }
     .highlight-green { color: #00FFCC; font-weight: bold; }
+    
+    /* Contenedores para emular estructura rígida Sielcon */
+    .sielcon-block {
+        background-color: #11111b;
+        padding: 15px;
+        border-radius: 8px;
+        border: 1px solid #2b2b3c;
+        margin-bottom: 15px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -47,10 +56,11 @@ def form_num(valor):
     except:
         return "$ 0"
 
-# IDs de los Libros de Google Sheets proporcionados
+# IDs de los Libros de Google Sheets
 ID_CONFIGURACION = "1W_68ToMyy_nu1oPH7ePFj74_vc1op5bGiFoP4KtaY0I"
 ID_DATOS_2026 = "1ZYn6foApzeEeKg_qKzW9faQFjBPXHoc8ffB_CeZ3f_s"
 ID_DATOS_2025 = "1aAl_PX1wpBWgTu9bLc81Wn57jSyt8Kqfwm4B4Fsa1W0"
+ID_INGRESO_PERSONAS = "1H-j4-gudnexcxnbk0oFMHBJNovDOyWOIWZCLaprEdYw"
 
 # --- 2. MOTOR DE DATOS ---
 @st.cache_data(ttl=60)
@@ -66,7 +76,7 @@ def load_all_data():
         df_u = pd.DataFrame(sheet_u.get_all_records())
         df_u.columns = [str(c).strip() for c in df_u.columns]
         
-        # 2. Función para extraer específicamente la hoja "Cubo"
+        # 2. Función para extraer específicamente la hoja "Cubo" de Slots
         def get_cubo_data(book_id):
             try:
                 sheet = client.open_by_key(book_id).worksheet("Cubo")
@@ -89,11 +99,27 @@ def load_all_data():
 
         df_2025 = get_cubo_data(ID_DATOS_2025)
         df_2026 = get_cubo_data(ID_DATOS_2026)
-        
         df_s = pd.concat([df_2025, df_2026], ignore_index=True)
         
+        # 3. Cargar la hoja "Cubo" de Ingreso de Personas
+        try:
+            sheet_p = client.open_by_key(ID_INGRESO_PERSONAS).worksheet("Cubo")
+            data_p = sheet_p.get_all_values()
+            if data_p and len(data_p) >= 2:
+                df_p = pd.DataFrame(data_p[1:], columns=data_p[0])
+                df_p.columns = [str(c).strip() for c in df_p.columns]
+                df_p = df_p.rename(columns={'FECHA': 'fecha', 'Fecha': 'fecha', 'CANTIDAD': 'cantidad', 'Cantidad': 'cantidad'})
+                df_p = df_p.loc[:, ~df_p.columns.str.contains('^$|Unnamed', case=False, na=False)]
+                df_p['fecha'] = pd.to_datetime(df_p['fecha'], dayfirst=True, errors='coerce').dt.date
+                df_p['cantidad'] = pd.to_numeric(df_p['cantidad'], errors='coerce').fillna(0)
+                df_p = df_p.dropna(subset=['fecha'])
+            else:
+                df_p = pd.DataFrame(columns=['fecha', 'cantidad'])
+        except:
+            df_p = pd.DataFrame(columns=['fecha', 'cantidad'])
+        
         if df_s.empty:
-            return pd.DataFrame(), df_u
+            return pd.DataFrame(), df_u, df_p
 
         for col in ['coin_in', 'win', 'jackpot']:
             if col in df_s.columns:
@@ -108,12 +134,12 @@ def load_all_data():
                     except: return 0.0
                 df_s[col] = df_s[col].apply(clean_currency)
             
-        return df_s, df_u
+        return df_s, df_u, df_p
     except Exception as e:
         st.error(f"Error crítico de sincronización: {e}")
-        return None, None
+        return None, None, None
 
-df_slots, df_users = load_all_data()
+df_slots, df_users, df_personas = load_all_data()
 
 # --- 3. INTERFAZ PRINCIPAL ---
 if df_users is not None:
@@ -143,45 +169,101 @@ if df_users is not None:
             st.title("Dashboard Fuente Mayor VDU")
             
             if df_slots is not None and not df_slots.empty:
-                with st.container(border=True):
-                    r1, r2 = st.columns([1, 3])
-                    safe_min = df_slots['fecha'].min()
-                    safe_max = df_slots['fecha'].max()
-                    f_rango = r1.date_input("📅 Ventana Temporal", [safe_min, safe_max])
+                
+                # =========================================================================
+                # FILA SUPERIOR: Filtros compactos integrados a la izquierda y KPIs a la derecha
+                # =========================================================================
+                with st.container():
+                    col_filtros, col_kpis = st.columns([1.2, 2.8])
                     
-                    c1, c2, c3, c4 = st.columns(4)
-                    f_id = c1.multiselect("🆔 Asset ID", sorted(df_slots['asset_Id'].unique()))
-                    f_marca = c2.multiselect("🎰 Marca", sorted(df_slots['marca'].unique()))
-                    f_modelo = c3.multiselect("📦 Modelo", sorted(df_slots['modelo'].unique()))
-                    f_juego = c4.multiselect("🎮 Juego", sorted(df_slots['juego'].unique()))
-                
-                df_f = df_slots.copy()
-                if isinstance(f_rango, (list, tuple)) and len(f_rango) == 2:
-                    df_f = df_f[(df_f['fecha'] >= f_rango[0]) & (df_f['fecha'] <= f_rango[1])]
-                
-                if f_id: df_f = df_f[df_f['asset_Id'].isin(f_id)]
-                if f_marca: df_f = df_f[df_f['marca'].isin(f_marca)]
-                if f_modelo: df_f = df_f[df_f['modelo'].isin(f_modelo)]
-                if f_juego: df_f = df_f[df_f['juego'].isin(f_juego)]
+                    with col_filtros:
+                        st.markdown("<div class='sielcon-block'>", unsafe_allow_html=True)
+                        safe_min = df_slots['fecha'].min()
+                        safe_max = df_slots['fecha'].max()
+                        f_rango = st.date_input("📅 Ventana Temporal", [safe_min, safe_max], label_visibility="collapsed")
+                        
+                        sub_c1, sub_c2 = st.columns(2)
+                        f_id = sub_c1.multiselect("🆔 Asset ID", sorted(df_slots['asset_Id'].unique()), placeholder="Assets")
+                        f_marca = sub_c2.multiselect("🎰 Marca", sorted(df_slots['marca'].unique()), placeholder="Marcas")
+                        
+                        sub_c3, sub_c4 = st.columns(2)
+                        f_modelo = sub_c3.multiselect("📦 Modelo", sorted(df_slots['modelo'].unique()), placeholder="Modelos")
+                        f_juego = sub_c4.multiselect("🎮 Juego", sorted(df_slots['juego'].unique()), placeholder="Juegos")
+                        st.markdown("</div>", unsafe_allow_html=True)
+                    
+                    # Filtros para el set de Slots
+                    df_f = df_slots.copy()
+                    if isinstance(f_rango, (list, tuple)) and len(f_rango) == 2:
+                        df_f = df_f[(df_f['fecha'] >= f_rango[0]) & (df_f['fecha'] <= f_rango[1])]
+                    
+                    if f_id: df_f = df_f[df_f['asset_Id'].isin(f_id)]
+                    if f_marca: df_f = df_f[df_f['marca'].isin(f_marca)]
+                    if f_modelo: df_f = df_f[df_f['modelo'].isin(f_modelo)]
+                    if f_juego: df_f = df_f[df_f['juego'].isin(f_juego)]
 
-                # KPIs
-                wt = df_f['win'].sum()
-                ct = df_f['coin_in'].sum()
-                ht = (wt/ct*100) if ct > 0 else 0
-                
-                k1, k2, k3 = st.columns(3)
-                with k1: st.markdown(f"<div class='main-kpi-label'>NET WIN TOTAL</div><div class='main-kpi-val'>{form_num(wt)}</div>", unsafe_allow_html=True)
-                with k2: st.markdown(f"<div class='main-kpi-label'>COIN IN</div><div class='main-kpi-val'>{form_num(ct)}</div>", unsafe_allow_html=True)
-                with k3: st.markdown(f"<div class='main-kpi-label'>HOLD REAL %</div><div class='main-kpi-val'>{ht:.2f}%</div>", unsafe_allow_html=True)
+                    # Filtros para el set de Personas (Sincronizado)
+                    df_p_f = df_personas.copy() if df_personas is not None else pd.DataFrame()
+                    if not df_p_f.empty and isinstance(f_rango, (list, tuple)) and len(f_rango) == 2:
+                        df_p_f = df_p_f[(df_p_f['fecha'] >= f_rango[0]) & (df_p_f['fecha'] <= f_rango[1])]
 
-                # --- SECCIÓN ANALISTA INTERNO (DASHBOARD) ---
+                    wt = df_f['win'].sum()
+                    ct = df_f['coin_in'].sum()
+                    ht = (wt/ct*100) if ct > 0 else 0
+                    asistencia = df_p_f['cantidad'].sum() if not df_p_f.empty else 0
+                    win_persona = (wt / asistencia) if asistencia > 0 else 0
+
+                    with col_kpis:
+                        st.markdown("<div class='sielcon-block' style='min-height: 185px;'>", unsafe_allow_html=True)
+                        k1, k2, k3, k4 = st.columns(4)
+                        with k1: st.markdown(f"<div class='main-kpi-label'>NET WIN TOTAL</div><div class='main-kpi-val'>{form_num(wt)}</div>", unsafe_allow_html=True)
+                        with k2: st.markdown(f"<div class='main-kpi-label'>COIN IN</div><div class='main-kpi-val'>{form_num(ct)}</div>", unsafe_allow_html=True)
+                        with k3: st.markdown(f"<div class='main-kpi-label'>HOLD REAL %</div><div class='main-kpi-val'>{ht:.2f}%</div>", unsafe_allow_html=True)
+                        with k4: st.markdown(f"<div class='main-kpi-label'>INGRESOS / WIN</div><div class='main-kpi-val' style='color:#FF9F43;'>{asistencia:,.0f}</div><div style='color:#A0A0A0; font-size:0.75rem; font-weight:bold; margin-top:2px;'>EFF: {form_num(win_persona)} x PAX</div>", unsafe_allow_html=True)
+                        st.markdown("</div>", unsafe_allow_html=True)
+
+                st.write("")
+
+                # =========================================================================
+                # CUADRÍCULA CENTRAL: Matriz expuesta de monitoreo en 3 columnas rígidas
+                # =========================================================================
+                m_col1, m_col2, m_col3 = st.columns([1.6, 1.2, 1.2])
+
+                with m_col1:
+                    st.markdown("### 🚫 Máquinas sin Juego")
+                    sin_juego = df_f.groupby('asset_Id')['coin_in'].sum()
+                    sin_juego = sin_juego[sin_juego == 0].index.tolist()
+                    if sin_juego:
+                        st.dataframe(df_f[df_f['asset_Id'].isin(sin_juego)][['asset_Id', 'marca', 'modelo', 'juego']].drop_duplicates(), use_container_width=True, height=250)
+                    else:
+                        st.success("Todas las máquinas registraron actividad.")
+
+                with m_col2:
+                    st.markdown("### 💎 Jackpots > 1M")
+                    altos_premios = df_f[df_f['jackpot'] >= 1000000][['fecha', 'asset_Id', 'jackpot']]
+                    if not altos_premios.empty:
+                        st.dataframe(altos_premios.sort_values('jackpot', ascending=False), use_container_width=True, height=250)
+                    else:
+                        st.info("Sin Jackpots > 1M.")
+
+                with m_col3:
+                    st.markdown("### 📈 Resumen por Marcas")
+                    df_comp = df_f.groupby('marca').agg({'win': 'sum', 'coin_in': 'sum', 'asset_Id': 'nunique'}).reset_index()
+                    df_comp['Hold %'] = (df_comp['win'] / df_comp['coin_in'] * 100).round(1)
+                    df_comp = df_comp.rename(columns={'asset_Id': 'Q'})
+                    st.dataframe(df_comp[['marca', 'Q', 'Hold %']].sort_values('Hold %', ascending=False), use_container_width=True, height=250)
+
+                st.write("")
                 st.divider()
+
+                # =========================================================================
+                # FILA DE HALLAZGOS: Analista de Sala
+                # =========================================================================
                 st.subheader("🤖 Analista Interno: Hallazgos de Sala")
                 a1, a2, a3, a4 = st.columns(4)
                 
                 with a1:
-                    top_marca = df_f.groupby('marca')['win'].sum().idxmax()
-                    val_marca = df_f.groupby('marca')['win'].sum().max()
+                    top_marca = df_f.groupby('marca')['win'].sum().idxmax() if not df_f.empty else "N/A"
+                    val_marca = df_f.groupby('marca')['win'].sum().max() if not df_f.empty else 0
                     st.markdown(f"""<div class='report-box'><div class='report-title'>Líder de Rentabilidad</div><div class='report-text'>La marca <b>{top_marca}</b> domina la sala con un win de {form_num(val_marca)}, representando el {((val_marca/wt*100) if wt>0 else 0):.1f}% del total.</div></div>""", unsafe_allow_html=True)
                 
                 with a2:
@@ -197,35 +279,29 @@ if df_users is not None:
                     eficiencia = (wt / len(df_f['asset_Id'].unique())) if len(df_f['asset_Id'].unique()) > 0 else 0
                     st.markdown(f"""<div class='report-box'><div class='report-title'>Promedio Win/Asset</div><div class='report-text'>Cada posición genera en promedio <b>{form_num(eficiencia)}</b>. Activos por debajo del 50% de este valor deben ser evaluados.</div></div>""", unsafe_allow_html=True)
 
-                # --- MENÚ DE EXCEPCIONES Y REPORTES RÁPIDOS ---
                 st.divider()
-                with st.expander("🛠️ Herramientas de Análisis Avanzado (Excepciones y Jackpots)"):
-                    tabs = st.tabs(["🚫 Máquinas sin Juego", "💎 Jackpots > 1M", "📈 Comparativa por Marcas"])
-                    
-                    with tabs[0]:
-                        sin_juego = df_f.groupby('asset_Id')['coin_in'].sum()
-                        sin_juego = sin_juego[sin_juego == 0].index.tolist()
-                        if sin_juego:
-                            st.warning(f"Se encontraron {len(sin_juego)} máquinas sin actividad en el periodo.")
-                            st.dataframe(df_f[df_f['asset_Id'].isin(sin_juego)][['asset_Id', 'marca', 'modelo', 'juego']].drop_duplicates(), use_container_width=True)
-                        else:
-                            st.success("Todas las máquinas registraron actividad.")
 
-                    with tabs[1]:
-                        altos_premios = df_f[df_f['jackpot'] >= 1000000][['fecha', 'asset_Id', 'marca', 'juego', 'jackpot']]
-                        if not altos_premios.empty:
-                            st.info("Listado de premios mayores a $ 1.000.000 pagados en el periodo.")
-                            st.dataframe(altos_premios.sort_values('jackpot', ascending=False), use_container_width=True)
-                        else:
-                            st.write("No se registraron Jackpots mayores a 1M en este rango.")
+                # =========================================================================
+                # FILA INFERIOR: Gráfico Financiero de Slots en paralelo al gráfico de Ingreso de Personas
+                # =========================================================================
+                g_col1, g_col2 = st.columns([2.2, 1.8])
 
-                    with tabs[2]:
-                        df_comp = df_f.groupby('marca').agg({'win': 'sum', 'coin_in': 'sum', 'asset_Id': 'nunique'}).reset_index()
-                        df_comp['Hold %'] = (df_comp['win'] / df_comp['coin_in'] * 100).round(2)
-                        df_comp['Win/Asset'] = (df_comp['win'] / df_comp['asset_Id']).round(0)
-                        st.dataframe(df_comp.sort_values('win', ascending=False), use_container_width=True)
+                with g_col1:
+                    st.markdown("### 📈 Rendimiento Diario de Sala (Slots)")
+                    df_time = df_f.groupby('fecha')[['win', 'coin_in']].sum().reset_index()
+                    fig_slots = px.area(df_time, x='fecha', y=['win', 'coin_in'], template="plotly_dark", color_discrete_sequence=['#00D1FF', '#FF4B4B'])
+                    fig_slots.update_layout(margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+                    st.plotly_chart(fig_slots, use_container_width=True)
 
-                st.plotly_chart(px.area(df_f.groupby('fecha')[['win', 'coin_in']].sum().reset_index(), x='fecha', y=['win', 'coin_in'], template="plotly_dark", color_discrete_sequence=['#00D1FF', '#FF4B4B']), use_container_width=True)
+                with g_col2:
+                    st.markdown("### 👥 Curva de Asistencia Diaria (Ingresos)")
+                    if not df_p_f.empty:
+                        df_p_daily = df_p_f.groupby('fecha')['cantidad'].sum().reset_index()
+                        fig_pers = px.bar(df_p_daily, x='fecha', y='cantidad', template="plotly_dark", color_discrete_sequence=['#FF9F43'])
+                        fig_pers.update_layout(margin=dict(l=10, r=10, t=10, b=10))
+                        st.plotly_chart(fig_pers, use_container_width=True)
+                    else:
+                        st.info("Sin registros de asistencia para estas fechas.")
             else:
                 st.error("Error: Sin datos en 'Cubo'.")
 
@@ -260,12 +336,11 @@ if df_users is not None:
                     h1, h2 = st.columns(2)
                     
                     with h1:
-                        # Detección de marcas en caída
                         ma_marca = df_a.groupby('marca')['coin_in'].sum()
                         mb_marca = df_b.groupby('marca')['coin_in'].sum()
                         caida = (ma_marca - mb_marca) / mb_marca * 100
-                        peor_marca = caida.idxmin()
-                        val_caida = caida.min()
+                        peor_marca = caida.idxmin() if not caida.empty else "N/A"
+                        val_caida = caida.min() if not caida.empty else 0
                         
                         if val_caida < -5:
                             st.markdown(f"""<div class='report-box' style='border-left-color: #FF4B4B'><div class='report-title'>Alerta de Volumen</div><div class='report-text'>La marca <span class='highlight-red'>{peor_marca}</span> ha sufrido una caída del <span class='highlight-red'>{val_caida:.1f}%</span> en su Coin In respecto al periodo anterior. Requiere revisión de tráfico en su isla.</div></div>""", unsafe_allow_html=True)
@@ -273,7 +348,6 @@ if df_users is not None:
                             st.markdown(f"""<div class='report-box'><div class='report-title'>Estabilidad de Marcas</div><div class='report-text'>No se detectan caídas críticas de volumen por marca. La operación se mantiene estable en términos de preferencia de cliente.</div></div>""", unsafe_allow_html=True)
 
                     with h2:
-                        # Detección de mejora en Hold
                         ha = (wa/ca*100) if ca>0 else 0
                         hb = (wb/cb*100) if cb>0 else 0
                         if ha > hb:
