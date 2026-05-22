@@ -7,89 +7,98 @@ import plotly.express as px
 import re
 from datetime import datetime, timedelta
 
-# --- 1. CONFIGURACIÓN Y ESTILOS AVANZADOS ---
+# --- 1. CONFIGURACIÓN Y ESTILOS AVANZADOS (ESTILO SIELCON) ---
 st.set_page_config(page_title="Dashboard VDU", layout="wide", page_icon="🎰")
 
-# Paleta de colores Sielcon integrada en la UI nativa
 st.markdown("""
     <style>
-    /* Estructuración de bloques modulares rígidos */
-    .sielcon-card {
-        background-color: #11111b;
-        border: 1px solid #2b2b3c;
-        border-radius: 6px;
-        padding: 15px;
-        margin-bottom: 10px;
+    /* Optimización general de márgenes de la app */
+    .block-container {
+        padding-top: 1.5rem !important;
+        padding-bottom: 1rem !important;
+        padding-left: 2rem !important;
+        padding-right: 2rem !important;
     }
     
-    /* Contenedor unificado para KPIs */
-    .kpi-container {
-        display: flex;
-        justify-content: space-between;
-        background-color: #11111b;
-        border: 1px solid #2b2b3c;
-        border-radius: 6px;
-        padding: 20px;
-        min-height: 140px;
+    /* Contenedor unificado superior para Filtros */
+    .filter-bar {
+        background-color: #0d0e12;
+        border: 1px solid #1e222d;
+        border-radius: 4px;
+        padding: 12px;
+        margin-bottom: 15px;
     }
-    .kpi-box {
-        flex: 1;
-        text-align: left;
-        padding: 0 10px;
+    
+    /* Bloques de sección modulares rígidos */
+    .sielcon-panel {
+        background-color: #0d0e12;
+        border: 1px solid #1e222d;
+        border-radius: 4px;
+        padding: 12px;
+        margin-bottom: 15px;
     }
-    .kpi-box:not(:last-child) {
-        border-right: 1px solid #2b2b3c;
+    
+    /* Títulos de paneles integrados */
+    .panel-header {
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: #ffffff;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        margin-bottom: 10px;
+        border-bottom: 1px solid #1e222d;
+        padding-bottom: 6px;
+    }
+    
+    /* Bloques de KPIs principales */
+    .kpi-wrapper {
+        background-color: #0d0e12;
+        border: 1px solid #1e222d;
+        border-radius: 4px;
+        padding: 15px;
+        text-align: center;
+        height: 100%;
     }
     .kpi-title {
-        color: #8e9aa8;
+        color: #848e9c;
         font-size: 0.75rem;
         font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.5px;
-        margin-bottom: 8px;
+        margin-bottom: 5px;
     }
     .kpi-value {
         color: #ffffff;
-        font-size: 1.8rem;
+        font-size: 1.9rem;
         font-weight: 800;
         line-height: 1.1;
     }
     .kpi-subtext {
-        color: #a0a0A0;
+        color: #ff9f43;
         font-size: 0.75rem;
         font-weight: bold;
-        margin-top: 4px;
+        margin-top: 5px;
     }
 
-    /* Tarjetas del Analista (Modulares) */
-    .analyst-card {
-        background-color: #161625;
-        border-left: 4px solid #00D1FF;
-        border-radius: 4px;
-        padding: 12px;
-        min-height: 120px;
+    /* Tarjetas del Analista */
+    .analyst-box {
+        background-color: #121622;
+        border-left: 4px solid #00d1ff;
+        border-radius: 2px;
+        padding: 10px;
+        min-height: 95px;
     }
     .analyst-title {
-        color: #00D1FF;
-        font-size: 0.8rem;
+        color: #00d1ff;
+        font-size: 0.75rem;
         font-weight: 700;
         text-transform: uppercase;
-        margin-bottom: 6px;
+        margin-bottom: 4px;
     }
     .analyst-text {
-        color: #e0e0e0;
-        font-size: 0.8rem;
+        color: #d1d4dc;
+        font-size: 0.78rem;
         line-height: 1.3;
-    }
-    
-    /* Headers de secciones de datos */
-    .section-header {
-        font-size: 1rem;
-        font-weight: 700;
-        color: #ffffff;
-        margin-bottom: 8px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -116,12 +125,12 @@ def load_all_data():
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
         client = gspread.authorize(creds)
         
-        # 1. Cargar Usuarios
+        # 1. Usuarios
         sheet_u = client.open_by_key(ID_CONFIGURACION).worksheet("Usuarios")
         df_u = pd.DataFrame(sheet_u.get_all_records())
         df_u.columns = [str(c).strip() for c in df_u.columns]
         
-        # 2. Cargar Hojas "Cubo" de Slots
+        # 2. Hojas Slots
         def get_cubo_data(book_id):
             try:
                 sheet = client.open_by_key(book_id).worksheet("Cubo")
@@ -140,7 +149,7 @@ def load_all_data():
         df_2026 = get_cubo_data(ID_DATOS_2026)
         df_s = pd.concat([df_2025, df_2026], ignore_index=True)
         
-        # 3. Cargar Hoja de Ingreso de Personas
+        # 3. Asistencia
         try:
             sheet_p = client.open_by_key(ID_INGRESO_PERSONAS).worksheet("Cubo")
             data_p = sheet_p.get_all_values()
@@ -179,7 +188,7 @@ def load_all_data():
 
 df_slots, df_users, df_personas = load_all_data()
 
-# --- 3. INTERFAZ DE LOGUEO Y NAVEGACIÓN ---
+# --- 3. LOGUEO Y ENRUTAMIENTO ---
 if df_users is not None:
     credentials = {"usernames": {str(u).lower(): {"name": r['nombre'], "password": str(r['password']), "role": r['rol']} 
                    for u, r in df_users.set_index('usuario').iterrows()}}
@@ -189,10 +198,10 @@ if df_users is not None:
 
     if st.session_state.get("authentication_status"):
         with st.sidebar:
-            st.title("🛡️ Casino Fuente Mayor")
+            st.title("🎰 Fuente Mayor")
             st.write(f"Operador: **{st.session_state['name']}**")
             st.divider()
-            nav = st.radio("Navegación", ["📊 Dashboard de Sala", "🔄 Analista Comparativo", "👤 Gestión Usuarios"])
+            nav = st.radio("Menú de Análisis", ["📊 Dashboard de Sala", "🔄 Analista Comparativo", "👤 Gestión Usuarios"])
             st.write("")
             authenticator.logout('Cerrar Sesión', 'sidebar')
 
@@ -200,29 +209,29 @@ if df_users is not None:
         # VISTA: DASHBOARD DE SALA
         # =========================================================================
         if nav == "📊 Dashboard de Sala":
-            st.title("Dashboard Fuente Mayor VDU")
+            st.subheader("Dashboard Fuente Mayor VDU")
             
             if df_slots is not None and not df_slots.empty:
                 
-                # --- FILA SUPERIOR: FILTROS + BANNER DE KPIS UNIFICADOS ---
-                col_filtros, col_kpis = st.columns([1.1, 2.9])
+                # --- FILA 1: BARRA DE FILTROS FLUIDA (TIPO BARRA DE HERRAMIENTAS) ---
+                st.markdown("<div class='filter-bar'>", unsafe_allow_html=True)
+                f_col1, f_col2, f_col3, f_col4, f_col5 = st.columns([1.2, 1, 1, 1, 1])
                 
-                with col_filtros:
-                    st.markdown("<div class='sielcon-card' style='min-height: 140px;'>", unsafe_allow_html=True)
+                with f_col1:
                     safe_min = df_slots['fecha'].min()
                     safe_max = df_slots['fecha'].max()
                     f_rango = st.date_input("Ventana Temporal", [safe_min, safe_max], label_visibility="collapsed")
-                    
-                    sub_c1, sub_c2 = st.columns(2)
-                    f_id = sub_c1.multiselect("🆔 Asset ID", sorted(df_slots['asset_Id'].unique()), placeholder="Assets")
-                    f_marca = sub_c2.multiselect("🎰 Marca", sorted(df_slots['marca'].unique()), placeholder="Marcas")
-                    
-                    sub_c3, sub_c4 = st.columns(2)
-                    f_modelo = sub_c3.multiselect("📦 Modelo", sorted(df_slots['modelo'].unique()), placeholder="Modelos")
-                    f_juego = sub_c4.multiselect("🎮 Juego", sorted(df_slots['juego'].unique()), placeholder="Juegos")
-                    st.markdown("</div>", unsafe_allow_html=True)
+                with f_col2:
+                    f_id = st.multiselect("Asset ID", sorted(df_slots['asset_Id'].unique()), placeholder="🆔 Asset ID", label_visibility="collapsed")
+                with f_col3:
+                    f_marca = st.multiselect("Marca", sorted(df_slots['marca'].unique()), placeholder="🎰 Marca", label_visibility="collapsed")
+                with f_col4:
+                    f_modelo = st.multiselect("Modelo", sorted(df_slots['modelo'].unique()), placeholder="📦 Modelo", label_visibility="collapsed")
+                with f_col5:
+                    f_juego = st.multiselect("Juego", sorted(df_slots['juego'].unique()), placeholder="🎮 Juego", label_visibility="collapsed")
+                st.markdown("</div>", unsafe_allow_html=True)
                 
-                # Reglas de filtrado unificado (Slots y Asistencia)
+                # Ejecución de Filtros Sincronizados
                 df_f = df_slots.copy()
                 if isinstance(f_rango, (list, tuple)) and len(f_rango) == 2:
                     df_f = df_f[(df_f['fecha'] >= f_rango[0]) & (df_f['fecha'] <= f_rango[1])]
@@ -235,124 +244,117 @@ if df_users is not None:
                 if not df_p_f.empty and isinstance(f_rango, (list, tuple)) and len(f_rango) == 2:
                     df_p_f = df_p_f[(df_p_f['fecha'] >= f_rango[0]) & (df_p_f['fecha'] <= f_rango[1])]
 
-                # Cálculos métricos base
+                # Métricas Estructurales
                 wt = df_f['win'].sum()
                 ct = df_f['coin_in'].sum()
                 ht = (wt / ct * 100) if ct > 0 else 0
                 asistencia = df_p_f['cantidad'].sum() if not df_p_f.empty else 0
                 win_persona = (wt / asistencia) if asistencia > 0 else 0
 
-                with col_kpis:
-                    st.markdown(f"""
-                        <div class='kpi-container'>
-                            <div class='kpi-box'>
-                                <div class='kpi-title'>Net Win Total</div>
-                                <div class='kpi-value'>{form_num(wt)}</div>
-                            </div>
-                            <div class='kpi-box'>
-                                <div class='kpi-title'>Coin In</div>
-                                <div class='kpi-value'>{form_num(ct)}</div>
-                            </div>
-                            <div class='kpi-box'>
-                                <div class='kpi-title'>Hold Real %</div>
-                                <div class='kpi-value'>{ht:.2f}%</div>
-                            </div>
-                            <div class='kpi-box'>
-                                <div class='kpi-title'>Ingresos de Sala</div>
-                                <div class='kpi-value' style='color:#FF9F43;'>{asistencia:,.0f}</div>
-                                <div class='kpi-subtext'>EFF: {form_num(win_persona)} x PAX</div>
-                            </div>
-                        </div>
-                    """, unsafe_allow_html=True)
+                # --- FILA 2: PANEL DE CONTROL DE METRICAS (TODO EL ANCHO) ---
+                k_col1, k_col2, k_col3, k_col4 = st.columns(4)
+                with k_col1:
+                    st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Net Win Total</div><div class='kpi-value'>{form_num(wt)}</div></div>", unsafe_allow_html=True)
+                with k_col2:
+                    st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Coin In</div><div class='kpi-value'>{form_num(ct)}</div></div>", unsafe_allow_html=True)
+                with k_col3:
+                    st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Hold Real %</div><div class='kpi-value' style='color:#00ffcc;'>{ht:.2f}%</div></div>", unsafe_allow_html=True)
+                with k_col4:
+                    st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Ingresos / Tráfico</div><div class='kpi-value' style='color:#ff9f43;'>{asistencia:,.0f}</div><div class='kpi-subtext'>EFF: {form_num(win_persona)} x PAX</div></div>", unsafe_allow_html=True)
 
-                st.divider()
+                st.write("")
 
-                # --- CUADRÍCULA CENTRAL: MATRIZ DE EXCEPCIONES EXPUESTA EN PARALELO ---
-                m_col1, m_col2, m_col3 = st.columns([1.5, 1.2, 1.3])
+                # --- FILA 3: MATRIZ DE CUADROS OPERATIVOS EN PARALELO ---
+                m_col1, m_col2, m_col3 = st.columns([1.4, 1.3, 1.3])
 
                 with m_col1:
-                    st.markdown("<div class='section-header'>🚫 Máquinas sin Juego</div>", unsafe_allow_html=True)
+                    st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
+                    st.markdown("<div class='panel-header'>🚫 Máquinas sin Actividad</div>", unsafe_allow_html=True)
                     sin_juego = df_f.groupby('asset_Id')['coin_in'].sum()
                     sin_juego = sin_juego[sin_juego == 0].index.tolist()
                     if sin_juego:
                         df_sj = df_f[df_f['asset_Id'].isin(sin_juego)][['asset_Id', 'marca', 'modelo', 'juego']].drop_duplicates()
-                        st.dataframe(df_sj, use_container_width=True, height=220, hide_index=True)
+                        st.dataframe(df_sj, use_container_width=True, height=180, hide_index=True)
                     else:
-                        st.success("100% de activos con actividad comercial.")
+                        st.success("Operación óptima: 0 máquinas inactivas.")
+                    st.markdown("</div>", unsafe_allow_html=True)
 
                 with m_col2:
-                    st.markdown("<div class='section-header'>💎 Jackpots > 1M</div>", unsafe_allow_html=True)
+                    st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
+                    st.markdown("<div class='panel-header'>💎 Jackpots Mayores > 1M</div>", unsafe_allow_html=True)
                     altos_premios = df_f[df_f['jackpot'] >= 1000000][['fecha', 'asset_Id', 'jackpot']]
                     if not altos_premios.empty:
-                        st.dataframe(altos_premios.sort_values('jackpot', ascending=False), use_container_width=True, height=220, hide_index=True)
+                        st.dataframe(altos_premios.sort_values('jackpot', ascending=False), use_container_width=True, height=180, hide_index=True)
                     else:
-                        st.info("Sin registros mayores a $ 1M.")
+                        st.info("Sin registros de premios especiales.")
+                    st.markdown("</div>", unsafe_allow_html=True)
 
                 with m_col3:
-                    st.markdown("<div class='section-header'>📊 Resumen por Marcas</div>", unsafe_allow_html=True)
+                    st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
+                    st.markdown("<div class='panel-header'>📊 Rendimiento por Fabricante</div>", unsafe_allow_html=True)
                     df_comp = df_f.groupby('marca').agg({'win': 'sum', 'coin_in': 'sum', 'asset_Id': 'nunique'}).reset_index()
                     df_comp['Hold %'] = (df_comp['win'] / df_comp['coin_in'] * 100).round(2)
                     df_comp = df_comp.rename(columns={'asset_Id': 'Q'}).sort_values('win', ascending=False)
-                    st.dataframe(df_comp[['marca', 'Q', 'Hold %']], use_container_width=True, height=220, hide_index=True)
+                    st.dataframe(df_comp[['marca', 'Q', 'Hold %']], use_container_width=True, height=180, hide_index=True)
+                    st.markdown("</div>", unsafe_allow_html=True)
 
-                st.divider()
-
-                # --- FILA DE REPORTES AUTOMÁTICOS (ANALISTA DE SALA) ---
-                st.markdown("<div class='section-header'>🤖 Analista de Sala: Insights Clave</div>", unsafe_allow_html=True)
+                # --- FILA 4: INSIGHTS AUTOMÁTICOS DEL ANALISTA ---
+                st.markdown("<div class='sielcon-panel' style='padding-bottom:5px;'>", unsafe_allow_html=True)
+                st.markdown("<div class='panel-header'>🤖 Monitoreo Algorítmico de Sala</div>", unsafe_allow_html=True)
                 a1, a2, a3, a4 = st.columns(4)
                 
                 with a1:
                     top_m = df_f.groupby('marca')['win'].sum().idxmax() if not df_f.empty else "N/A"
                     val_m = df_f.groupby('marca')['win'].sum().max() if not df_f.empty else 0
-                    st.markdown(f"<div class='analyst-card'><div class='analyst-title'>Dominio de Sala</div><div class='analyst-text'><b>{top_m}</b> es el motor principal del casino con un win neto de {form_num(val_m)}.</div></div>", unsafe_allow_html=True)
-                
+                    st.markdown(f"<div class='analyst-box'><div class='analyst-title'>Líder del Mercado</div><div class='analyst-text'><b>{top_m}</b> encabeza el profit de sala con una recaudación neta de {form_num(val_m)}.</div></div>", unsafe_allow_html=True)
                 with a2:
                     avg_hold = df_f.groupby('asset_Id').apply(lambda x: (x['win'].sum()/x['coin_in'].sum()*100) if x['coin_in'].sum()>0 else 0)
                     outliers = len(avg_hold[avg_hold > 15])
-                    st.markdown(f"<div class='analyst-card' style='border-left-color:#FF4B4B;'><div class='analyst-title'>Alerta de Desvíos</div><div class='analyst-text'>Se detectaron <b>{outliers} máquinas</b> rindiendo con hold por encima del 15% (Riesgo de fuga).</div></div>", unsafe_allow_html=True)
-                
+                    st.markdown(f"<div class='analyst-box' style='border-left-color:#ef5350;'><div class='analyst-title'>Alerta de Desvíos</div><div class='analyst-text'>Detectados <b>{outliers} activos</b> con Hold Real superior al 15%. Riesgo potencial de rechazo de clientes.</div></div>", unsafe_allow_html=True)
                 with a3:
                     jack_sum = df_f['jackpot'].sum()
-                    st.markdown(f"<div class='analyst-card' style='border-left-color:#FF9F43;'><div class='analyst-title'>Premios Entregados</div><div class='analyst-text'>Un acumulado de <b>{form_num(jack_sum)}</b> devuelto en Jackpots impactó la retención global del ciclo.</div></div>", unsafe_allow_html=True)
-                
+                    st.markdown(f"<div class='analyst-box' style='border-left-color:#ff9f43;'><div class='analyst-title'>Volumen de Premios</div><div class='analyst-text'>Un total de <b>{form_num(jack_sum)}</b> fue entregado en Jackpots acumulados durante el ciclo seleccionado.</div></div>", unsafe_allow_html=True)
                 with a4:
                     eficiencia = (wt / len(df_f['asset_Id'].unique())) if len(df_f['asset_Id'].unique()) > 0 else 0
-                    st.markdown(f"<div class='analyst-card'><div class='analyst-title'>Rendimiento Unitario</div><div class='analyst-text'>El promedio de producción por posición se ubica actualmente en <b>{form_num(eficiencia)}</b>.</div></div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='analyst-box'><div class='analyst-title'>Eficiencia Media</div><div class='analyst-text'>La media de rendimiento por terminal instalada se posiciona en <b>{form_num(eficiencia)}</b>.</div></div>", unsafe_allow_html=True)
+                st.markdown("</div>", unsafe_allow_html=True)
 
-                st.divider()
-
-                # --- FILA INFERIOR: GRÁFICOS PARALELOS LIMPIOS Y NORMALIZADOS ---
-                g_col1, g_col2 = st.columns([2.1, 1.9])
+                # --- FILA 5: GRÁFICOS INTERACTIVOS COMPACTOS (PARALELO) ---
+                g_col1, g_col2 = st.columns([2, 2])
 
                 with g_col1:
-                    st.markdown("<div class='section-header'>📈 Evolución Financiera de Sala ($)</div>", unsafe_allow_html=True)
+                    st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
+                    st.markdown("<div class='panel-header'>📈 Evolución Temporal Financiera (Slots)</div>", unsafe_allow_html=True)
                     df_time = df_f.groupby('fecha')[['win', 'coin_in']].sum().reset_index()
-                    # Mapeo limpio para evitar leyendas confusas en el eje
                     df_time_melt = df_time.melt(id_vars='fecha', value_vars=['win', 'coin_in'], var_name='Métrica', value_name='Monto')
                     df_time_melt['Métrica'] = df_time_melt['Métrica'].replace({'win': 'Net Win', 'coin_in': 'Coin In'})
                     
                     fig_slots = px.area(df_time_melt, x='fecha', y='Monto', color='Métrica', template="plotly_dark",
                                         color_discrete_map={'Net Win': '#00D1FF', 'Coin In': '#FF4B4B'})
-                    fig_slots.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=280, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+                    fig_slots.update_layout(margin=dict(l=10, r=10, t=5, b=5), height=220, xaxis_title=None, yaxis_title=None,
+                                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
                     st.plotly_chart(fig_slots, use_container_width=True)
+                    st.markdown("</div>", unsafe_allow_html=True)
 
                 with g_col2:
-                    st.markdown("<div class='section-header'>👥 Curva de Tráfico e Ingresos (PAX)</div>", unsafe_allow_html=True)
+                    st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
+                    st.markdown("<div class='panel-header'>👥 Comportamiento de Asistencia (Ingresos)</div>", unsafe_allow_html=True)
                     if not df_p_f.empty:
                         df_p_daily = df_p_f.groupby('fecha')['cantidad'].sum().reset_index()
                         fig_pers = px.bar(df_p_daily, x='fecha', y='cantidad', template="plotly_dark", color_discrete_sequence=['#FF9F43'])
-                        fig_pers.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=280, yaxis_title="Clientes")
+                        fig_pers.update_layout(margin=dict(l=10, r=10, t=5, b=5), height=220, xaxis_title=None, yaxis_title=None)
                         st.plotly_chart(fig_pers, use_container_width=True)
                     else:
-                        st.info("Sin registros de control de accesos para las fechas seleccionadas.")
+                        st.info("Sin datos de accesos en este rango.")
+                    st.markdown("</div>", unsafe_allow_html=True)
             else:
-                st.error("Error: Sin conexión con la hoja fuente 'Cubo'.")
+                st.error("Error al mapear la base de datos 'Cubo'.")
 
         # =========================================================================
         # VISTA: ANALISTA COMPARATIVO
         # =========================================================================
         elif nav == "🔄 Analista Comparativo":
-            st.title("⚖️ Diagnóstico Comparativo de Periodos")
+            st.subheader("⚖️ Diagnóstico Comparativo de Periodos")
             if not df_slots.empty:
                 with st.container(border=True):
                     col1, col2 = st.columns(2)
@@ -374,7 +376,7 @@ if df_users is not None:
                     m2.metric("Variación COIN IN (A vs B)", form_num(ca - cb), f"{((ca-cb)/cb*100 if cb!=0 else 0):.2f}%")
 
                     st.divider()
-                    st.subheader("Desglose por Asset")
+                    st.markdown("<div class='section-header'>Desglose Técnico por Posición</div>", unsafe_allow_html=True)
                     df_diff = pd.merge(
                         df_a.groupby('asset_Id')['win'].sum().reset_index(),
                         df_b.groupby('asset_Id')['win'].sum().reset_index(),
@@ -387,8 +389,8 @@ if df_users is not None:
         # VISTA: GESTIÓN DE USUARIOS
         # =========================================================================
         elif nav == "👤 Gestión Usuarios":
-            st.title("👤 Administración de Cuentas")
+            st.subheader("👤 Auditoría de Accesos")
             st.dataframe(df_users[['nombre', 'usuario', 'rol']], use_container_width=True, hide_index=True)
 
     elif st.session_state.get("authentication_status") is False:
-        st.error('Usuario o Contraseña incorrectos')
+        st.error('Credenciales de acceso no válidas')
