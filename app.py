@@ -149,7 +149,7 @@ def load_all_data():
         df_2026 = get_cubo_data(ID_DATOS_2026)
         df_s = pd.concat([df_2025, df_2026], ignore_index=True)
         
-        # 3. Asistencia (Corregido para sanitizar puntos contables de Google Sheets)
+        # 3. Asistencia (Corregido para extraer fechas con texto "mié, 01/01/2025" y limpiar números)
         try:
             sheet_p = client.open_by_key(ID_INGRESO_PERSONAS).get_worksheet(0)
             data_p = sheet_p.get_all_values()
@@ -159,12 +159,21 @@ def load_all_data():
                 
                 if 'fecha' in df_p.columns and 'cantidad' in df_p.columns:
                     df_p = df_p[['fecha', 'cantidad']]
-                    df_p['fecha'] = pd.to_datetime(df_p['fecha'], dayfirst=True, errors='coerce').dt.date
                     
-                    # Limpieza de strings con puntos (ej: "1.250" -> 1250)
+                    # Función para extraer sólo la fecha limpia usando expresiones regulares
+                    def clean_date_string(val):
+                        if not val: return None
+                        # Busca el patrón de una fecha estándar DD/MM/AAAA o similar
+                        match = re.search(r'(\d{1,2}/\d{1,2}/\d{4})', str(val))
+                        return match.group(1) if match else str(val).strip()
+
+                    df_p['fecha_limpia'] = df_p['fecha'].apply(clean_date_string)
+                    df_p['fecha'] = pd.to_datetime(df_p['fecha_limpia'], dayfirst=True, errors='coerce').dt.date
+                    
+                    # Limpieza de strings numéricos con puntos (ej: "1.250" -> 1250)
                     def clean_asistencia_num(val):
                         if not val or str(val).strip() == "": return 0.0
-                        cleaned = re.sub(r'[^\d]', '', str(val)) # Remueve todo lo que no sea dígito puro
+                        cleaned = re.sub(r'[^\d]', '', str(val))
                         try: return float(cleaned)
                         except: return 0.0
                         
