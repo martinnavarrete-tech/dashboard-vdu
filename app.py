@@ -115,6 +115,7 @@ ID_CONFIGURACION = "1W_68ToMyy_nu1oPH7ePFj74_vc1op5bGiFoP4KtaY0I"
 ID_DATOS_2026 = "1ZYn6foApzeEeKg_qKzW9faQFjBPXHoc8ffB_CeZ3f_s"
 ID_DATOS_2025 = "1aAl_PX1wpBWgTu9bLc81Wn57jSyt8Kqfwm4B4Fsa1W0"
 ID_INGRESO_PERSONAS = "1H-j4-gudnexcxnbk0oFMHBJNovDOyWOIWZCLaprEdYw"
+ID_INGRESO_BILLETES = "17c6P1pY21SC_xFoLulC7FgvUBz8zj8xz-61gsC-vsaI"
 
 # --- 2. MOTOR DE DATOS CACHEADO ---
 @st.cache_data(ttl=60)
@@ -149,7 +150,7 @@ def load_all_data():
         df_2026 = get_cubo_data(ID_DATOS_2026)
         df_s = pd.concat([df_2025, df_2026], ignore_index=True)
         
-        # 3. Asistencia / Ocupación (Corregido para mapear la columna 'ocupacion')
+        # 3. Asistencia / Ocupación
         try:
             sheet_p = client.open_by_key(ID_INGRESO_PERSONAS).get_worksheet(0)
             data_p = sheet_p.get_all_values()
@@ -157,7 +158,6 @@ def load_all_data():
                 df_p = pd.DataFrame(data_p[1:], columns=data_p[0])
                 df_p.columns = [str(c).strip().lower() for c in df_p.columns]
                 
-                # Buscamos 'fecha' y 'ocupacion' (o 'ocupación' con acento por las dudas)
                 col_ocupacion = None
                 for c in df_p.columns:
                     if 'ocupacion' in c or 'ocupaci' in c:
@@ -167,11 +167,8 @@ def load_all_data():
                 if 'fecha' in df_p.columns and col_ocupacion:
                     df_p = df_p[['fecha', col_ocupacion]]
                     df_p = df_p.rename(columns={col_ocupacion: 'cantidad'})
-                    
-                    # Al estar en formato fecha nativo en Sheets, to_datetime lo asimila sin problemas
                     df_p['fecha'] = pd.to_datetime(df_p['fecha'], errors='coerce').dt.date
                     
-                    # Limpieza de texto sin formato (elimina puntos de miles para no confundirlos con decimales)
                     def clean_asistencia_num(val):
                         if not val or str(val).strip() == "": return 0.0
                         cleaned = re.sub(r'[^\d]', '', str(val))
@@ -186,9 +183,34 @@ def load_all_data():
                 df_p = pd.DataFrame(columns=['fecha', 'cantidad'])
         except:
             df_p = pd.DataFrame(columns=['fecha', 'cantidad'])
+
+        # 4. Cubo de Ingreso de Billetes 2026
+        try:
+            sheet_b = client.open_by_key(ID_INGRESO_BILLETES).get_worksheet(0)
+            data_b = sheet_b.get_all_values()
+            if data_b and len(data_b) >= 2:
+                df_b = pd.DataFrame(data_b[1:], columns=data_b[0])
+                df_b.columns = [str(c).strip() for c in df_b.columns]
+                df_b = df_b.rename(columns={'asset_id': 'asset_Id', 'Asset ID': 'asset_Id', 'Asset id': 'asset_Id', 'fecha': 'fecha'})
+                
+                df_b['fecha'] = pd.to_datetime(df_b['fecha'], errors='coerce').dt.date
+                df_b = df_b.dropna(subset=['fecha'])
+                
+                for col in df_b.columns:
+                    if col not in ['fecha', 'asset_Id', 'marca', 'modelo', 'juego']:
+                        def clean_bill_data(val):
+                            if not val or str(val).strip() == "": return 0.0
+                            cleaned = re.sub(r'[^\d]', '', str(val))
+                            try: return float(cleaned)
+                            except: return 0.0
+                        df_b[col] = df_b[col].apply(clean_bill_data)
+            else:
+                df_b = pd.DataFrame()
+        except:
+            df_b = pd.DataFrame()
         
         if df_s.empty:
-            return pd.DataFrame(), df_u, df_p
+            return pd.DataFrame(), df_u, df_p, df_b
 
         for col in ['coin_in', 'win', 'jackpot']:
             if col in df_s.columns:
@@ -203,12 +225,12 @@ def load_all_data():
                     except: return 0.0
                 df_s[col] = df_s[col].apply(clean_currency)
             
-        return df_s, df_u, df_p
+        return df_s, df_u, df_p, df_b
     except Exception as e:
         st.error(f"Error crítico de sincronización: {e}")
-        return None, None, None
+        return None, None, None, None
 
-df_slots, df_users, df_personas = load_all_data()
+df_slots, df_users, df_personas, df_billetes = load_all_data()
 
 # --- 3. LOGUEO Y ENRUTAMIENTO ---
 if df_users is not None:
@@ -223,9 +245,12 @@ if df_users is not None:
             st.title("🎰 Fuente Mayor")
             st.write(f"Operador: **{st.session_state['name']}**")
             st.divider()
-            nav = st.radio("Menú de Análisis", ["📊 Dashboard de Sala", "🔄 Analista Comparativo", "👤 Gestión Usuarios"])
+            nav = st.radio("Menú de Análisis", ["📊 Dashboard de Sala", "💵 Control de Billetes", "🔄 Analista Comparativo", "👤 Gestión Usuarios"])
             st.write("")
             authenticator.logout('Cerrar Sesión', 'sidebar')
+
+        safe_min = df_slots['fecha'].min() if df_slots is not None and not df_slots.empty else datetime.now().date()
+        safe_max = df_slots['fecha'].max() if df_slots is not None and not df_slots.empty else datetime.now().date()
 
         # =========================================================================
         # VISTA: DASHBOARD DE SALA
@@ -240,11 +265,9 @@ if df_users is not None:
                 f_col1, f_col2, f_col3, f_col4, f_col5 = st.columns([1.2, 1, 1, 1, 1])
                 
                 with f_col1:
-                    safe_min = df_slots['fecha'].min()
-                    safe_max = df_slots['fecha'].max()
                     f_rango = st.date_input("Ventana Temporal", [safe_min, safe_max], label_visibility="collapsed")
                 with f_col2:
-                    f_id = st.multiselect("Asset ID", sorted(df_slots['asset_Id'].unique()), placeholder="🆔 Asset ID", label_visibility="collapsed")
+                    f_id = st.multiselect("CUIM / N° Máquina", sorted(df_slots['asset_Id'].unique()), placeholder="🆔 CUIM / N° Máquina", label_visibility="collapsed")
                 with f_col3:
                     f_marca = st.multiselect("Marca", sorted(df_slots['marca'].unique()), placeholder="🎰 Marca", label_visibility="collapsed")
                 with f_col4:
@@ -291,11 +314,12 @@ if df_users is not None:
 
                 with m_col1:
                     st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
-                    st.markdown("<div class='panel-header'>🚫 Máquinas sin Actividad</div>", unsafe_allow_html=True)
+                    st.markdown("<div class='panel-header'>🚫 Máquinas sin Actividad (CUIM)</div>", unsafe_allow_html=True)
                     sin_juego = df_f.groupby('asset_Id')['coin_in'].sum()
                     sin_juego = sin_juego[sin_juego == 0].index.tolist()
                     if sin_juego:
                         df_sj = df_f[df_f['asset_Id'].isin(sin_juego)][['asset_Id', 'marca', 'modelo', 'juego']].drop_duplicates()
+                        df_sj = df_sj.rename(columns={'asset_Id': 'CUIM / N° Maq'})
                         st.dataframe(df_sj, use_container_width=True, height=180, hide_index=True)
                     else:
                         st.success("Operación óptima: 0 máquinas inactivas.")
@@ -306,6 +330,7 @@ if df_users is not None:
                     st.markdown("<div class='panel-header'>💎 Jackpots Mayores > 1M</div>", unsafe_allow_html=True)
                     altos_premios = df_f[df_f['jackpot'] >= 1000000][['fecha', 'asset_Id', 'jackpot']]
                     if not altos_premios.empty:
+                        altos_premios = altos_premios.rename(columns={'asset_Id': 'CUIM'})
                         st.dataframe(altos_premios.sort_values('jackpot', ascending=False), use_container_width=True, height=180, hide_index=True)
                     else:
                         st.info("Sin registros de premios especiales.")
@@ -332,7 +357,7 @@ if df_users is not None:
                 with a2:
                     avg_hold = df_f.groupby('asset_Id').apply(lambda x: (x['win'].sum()/x['coin_in'].sum()*100) if x['coin_in'].sum()>0 else 0)
                     outliers = len(avg_hold[avg_hold > 15])
-                    st.markdown(f"<div class='analyst-box' style='border-left-color:#ef5350;'><div class='analyst-title'>Alerta de Desvíos</div><div class='analyst-text'>Detectados <b>{outliers} activos</b> con Hold Real superior al 15%. Riesgo potencial de rechazo de clientes.</div></div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='analyst-box' style='border-left-color:#ef5350;'><div class='analyst-title'>Alerta de Desvíos</div><div class='analyst-text'>Detectados <b>{outliers} CUIMs</b> con Hold Real superior al 15%. Riesgo potencial de rechazo de clientes.</div></div>", unsafe_allow_html=True)
                 with a3:
                     jack_sum = df_f['jackpot'].sum()
                     st.markdown(f"<div class='analyst-box' style='border-left-color:#ff9f43;'><div class='analyst-title'>Volumen de Premios</div><div class='analyst-text'>Un total de <b>{form_num(jack_sum)}</b> fue entregado en Jackpots acumulados durante el ciclo seleccionado.</div></div>", unsafe_allow_html=True)
@@ -373,6 +398,72 @@ if df_users is not None:
                 st.error("Error al mapear la base de datos 'Cubo'.")
 
         # =========================================================================
+        # VISTA: CONTROL DE BILLETES
+        # =========================================================================
+        elif nav == "💵 Control de Billetes":
+            st.subheader("Reporte Avanzado de Drop Físico por CUIM / N° Máquina")
+            
+            if df_billetes is not None and not df_billetes.empty:
+                # --- FILTRADO DE BILLETES SINCRONIZADO ---
+                st.markdown("<div class='filter-bar'>", unsafe_allow_html=True)
+                fb_col1, fb_col2 = st.columns([1.5, 3.5])
+                with fb_col1:
+                    fb_rango = st.date_input("Filtrar Rango Billetes", [df_billetes['fecha'].min(), df_billetes['fecha'].max()], label_visibility="collapsed")
+                with fb_col2:
+                    fb_id = st.multiselect("Filtrar por CUIM (N° Máquina)", sorted(df_billetes['asset_Id'].unique()), placeholder="🆔 Seleccionar CUIM...", label_visibility="collapsed")
+                st.markdown("</div>", unsafe_allow_html=True)
+                
+                df_b_f = df_billetes.copy()
+                if isinstance(fb_rango, (list, tuple)) and len(fb_rango) == 2:
+                    df_b_f = df_b_f[(df_b_f['fecha'] >= fb_rango[0]) & (df_b_f['fecha'] <= fb_rango[1])]
+                if fb_id:
+                    df_b_f = df_b_f[df_b_f['asset_Id'].isin(fb_id)]
+                
+                # Columnas de denominación lógica vs columna 'total'
+                col_denominaciones = [c for c in df_b_f.columns if c.lower() not in ['fecha', 'asset_id', 'total', 'marca', 'modelo', 'juego']]
+                total_pesos_drop = df_b_f['total'].sum() if 'total' in df_b_f.columns else 0.0
+                total_piezas_físicas = df_b_f[col_denominaciones].sum().sum() if col_denominaciones else 0
+
+                # KPIs de Efectivo
+                bk1, bk2 = st.columns(2)
+                with bk1:
+                    st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Total Recaudado en Pesos ($)</div><div class='kpi-value' style='color:#00ffcc;'>{form_num(total_pesos_drop)}</div></div>", unsafe_allow_html=True)
+                with bk2:
+                    st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Volumen Total de Billetes Físicos</div><div class='kpi-value'>{total_piezas_físicas:,.0f} u.</div></div>", unsafe_allow_html=True)
+                
+                st.write("")
+                
+                bg_col1, bg_col2 = st.columns([2, 2])
+                
+                with bg_col1:
+                    st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
+                    st.markdown("<div class='panel-header'>💵 Recaudación Total en Pesos ($) por CUIM / N° Máquina</div>", unsafe_allow_html=True)
+                    if 'total' in df_b_f.columns:
+                        df_maquina_cash = df_b_f.groupby('asset_Id')['total'].sum().reset_index().sort_values('total', ascending=False)
+                        df_maquina_cash.columns = ['CUIM / N° Máquina', 'Total Recaudado ($)']
+                        st.dataframe(df_maquina_cash.style.format({'Total Recaudado ($)': lambda x: form_num(x)}), use_container_width=True, height=250, hide_index=True)
+                    else:
+                        st.warning("No se localizó la columna 'total' en el libro origen.")
+                    st.markdown("</div>", unsafe_allow_html=True)
+                    
+                with bg_col2:
+                    st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
+                    st.markdown("<div class='panel-header'>📊 Desglose de Unidades por Denominación</div>", unsafe_allow_html=True)
+                    if col_denominaciones:
+                        df_denom = df_b_f[col_denominaciones].sum().reset_index()
+                        df_denom.columns = ['Denominación', 'Cantidad de Billetes']
+                        df_denom = df_denom.sort_values('Cantidad de Billetes', ascending=False)
+                        
+                        fig_denom = px.bar(df_denom, x='Denominación', y='Cantidad de Billetes', template="plotly_dark", color_discrete_sequence=['#00D1FF'])
+                        fig_denom.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=230, xaxis_title=None, yaxis_title=None)
+                        st.plotly_chart(fig_denom, use_container_width=True)
+                    else:
+                        st.info("Sin registros de denominaciones detalladas.")
+                    st.markdown("</div>", unsafe_allow_html=True)
+            else:
+                st.error("No se pudo cargar la base 'Cubo de Ingreso de Billetes 2026' o la hoja se encuentra vacía.")
+
+        # =========================================================================
         # VISTA: ANALISTA COMPARATIVO
         # =========================================================================
         elif nav == "🔄 Analista Comparativo":
@@ -398,13 +489,14 @@ if df_users is not None:
                     m2.metric("Variación COIN IN (A vs B)", form_num(ca - cb), f"{((ca-cb)/cb*100 if cb!=0 else 0):.2f}%")
 
                     st.divider()
-                    st.markdown("<div class='section-header'>Desglose Técnico por Posición</div>", unsafe_allow_html=True)
+                    st.markdown("<div class='section-header'>Desglose Técnico por CUIM / Posición</div>", unsafe_allow_html=True)
                     df_diff = pd.merge(
                         df_a.groupby('asset_Id')['win'].sum().reset_index(),
                         df_b.groupby('asset_Id')['win'].sum().reset_index(),
                         on='asset_Id', suffixes=('_A', '_B'), how='outer'
                     ).fillna(0)
                     df_diff['Var. $'] = df_diff['win_A'] - df_diff['win_B']
+                    df_diff = df_diff.rename(columns={'asset_Id': 'CUIM'})
                     st.dataframe(df_diff.sort_values('Var. $', ascending=False), use_container_width=True, hide_index=True)
 
         # =========================================================================
