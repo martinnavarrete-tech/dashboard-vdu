@@ -7,7 +7,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import re
-import io
 from datetime import datetime, timedelta
 
 # =============================================================================
@@ -170,11 +169,9 @@ def clean_col_vectorized(series: pd.Series) -> pd.Series:
 
 
 def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
-    """Convierte un DataFrame a bytes de Excel para descarga."""
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Datos")
-    return buffer.getvalue()
+    """Convierte un DataFrame a CSV (utf-8-sig para compatibilidad con Excel).
+    Se usa CSV en lugar de .xlsx para evitar dependencia de openpyxl/xlsxwriter."""
+    return df.to_csv(index=False).encode("utf-8-sig")
 
 
 # =============================================================================
@@ -622,7 +619,9 @@ if df_users is not None and not df_users.empty:
                 .agg(win=("win", "sum"), coin_in=("coin_in", "sum"))
                 .reset_index()
             )
-            df_rank["Hold %"] = (df_rank["win"] / df_rank["coin_in"].replace(0, pd.NA) * 100).round(2)
+            df_rank["Hold %"] = (
+                df_rank["win"] / df_rank["coin_in"].where(df_rank["coin_in"] > 0) * 100
+            ).round(2)
             df_rank = df_rank.sort_values("win", ascending=False).head(15)
             df_rank["Alerta"] = df_rank["Hold %"].apply(
                 lambda h: "🔴 Alto" if h > 15 else ("🟡 Revisar" if h > 10 else "✅ OK")
@@ -639,8 +638,8 @@ if df_users is not None and not df_users.empty:
             st.download_button(
                 "⬇️ Exportar ranking a Excel",
                 data=excel_rank,
-                file_name=f"ranking_terminales_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                file_name=f"ranking_terminales_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
             )
 
         st.markdown("</div>", unsafe_allow_html=True)
@@ -692,7 +691,7 @@ if df_users is not None and not df_users.empty:
                         ["asset_id"] + [c for c in ["marca", "modelo", "juego"] if c in df_f.columns]
                     ].drop_duplicates()
                     st.dataframe(df_sj.rename(columns={"asset_id": "CUIM"}), use_container_width=True, height=200, hide_index=True)
-                    st.download_button("⬇️ Exportar", df_to_excel_bytes(df_sj), file_name="maquinas_inactivas.xlsx")
+                    st.download_button("⬇️ Exportar", df_to_excel_bytes(df_sj), file_name="maquinas_inactivas.csv")
                 else:
                     st.success("Operación óptima: 0 máquinas inactivas registradas en este período.")
 
@@ -703,7 +702,7 @@ if df_users is not None and not df_users.empty:
                     altos_display = altos.rename(columns={"asset_id": "CUIM"}).sort_values("jackpot", ascending=False)
                     altos_display["jackpot"] = altos_display["jackpot"].apply(form_num)
                     st.dataframe(altos_display, use_container_width=True, height=200, hide_index=True)
-                    st.download_button("⬇️ Exportar", df_to_excel_bytes(altos), file_name="jackpots_altos.xlsx")
+                    st.download_button("⬇️ Exportar", df_to_excel_bytes(altos), file_name="jackpots_altos.csv")
                 else:
                     st.info("Sin premios mayores a $ 1.000.000 en el período.")
 
@@ -724,7 +723,7 @@ if df_users is not None and not df_users.empty:
                     ),
                     use_container_width=True, height=200, hide_index=True,
                 )
-                st.download_button("⬇️ Exportar", df_to_excel_bytes(df_comp[["marca", "maquinas", "win", "coin_in", "Hold %"]]), file_name="resumen_fabricantes.xlsx")
+                st.download_button("⬇️ Exportar", df_to_excel_bytes(df_comp[["marca", "maquinas", "win", "coin_in", "Hold %"]]), file_name="resumen_fabricantes.csv")
 
     # =========================================================================
     # VISTA 2: CONTROL DE BILLETES
@@ -795,7 +794,7 @@ if df_users is not None and not df_users.empty:
                 for c in num_cols:
                     df_res_fmt[c] = df_res_fmt[c].apply(form_num)
                 st.dataframe(df_res_fmt, use_container_width=True, height=300, hide_index=True)
-                st.download_button("⬇️ Exportar retenciones", df_to_excel_bytes(df_res), file_name="retenciones.xlsx")
+                st.download_button("⬇️ Exportar retenciones", df_to_excel_bytes(df_res), file_name="retenciones.csv")
             st.markdown("</div>", unsafe_allow_html=True)
 
         with bg2:
@@ -877,7 +876,7 @@ if df_users is not None and not df_users.empty:
                 df_diff_disp[c] = df_diff_disp[c].apply(form_num)
 
             st.dataframe(df_diff_disp.sort_values("Var. $", ascending=False), use_container_width=True, hide_index=True)
-            st.download_button("⬇️ Exportar comparativo", df_to_excel_bytes(df_diff), file_name="comparativo_periodos.xlsx")
+            st.download_button("⬇️ Exportar comparativo", df_to_excel_bytes(df_diff), file_name="comparativo_periodos.csv")
 
     # =========================================================================
     # VISTA 4: GESTIÓN DE USUARIOS (solo admin)
