@@ -93,52 +93,42 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 def form_num(valor):
-    """Formatea números al estilo contable: $ 1.250.000"""
+    """Formatea números al estilo contable local: $ 1.250.000"""
     try:
+        if pd.isna(valor): return "$ 0"
         return f"$ {valor:,.0f}".replace(',', '.')
     except:
         return "$ 0"
 
 def clean_numeric_string(val):
     """
-    Limpia textos sin formato de Google Sheets eliminando símbolos.
-    Resuelve el conflicto de puntos de miles y comas decimales de forma estricta.
+    Parsea cadenas de texto con irregularidades en puntos/comas de miles y decimales.
+    Fuerza la conversión limpia eliminando signos monetarios o espacios.
     """
     if not val or str(val).strip() == "": 
         return 0.0
     
-    # Quitar signo monetario y espacios en blanco
     cleaned = str(val).strip().replace('$', '').replace(' ', '')
     
-    # Caso 1: Tiene puntos de miles y coma decimal (Ej: 1.250.000,50)
     if ',' in cleaned and '.' in cleaned:
         if cleaned.rfind('.') > cleaned.rfind(','):
-            # Formato Americano (1,250,000.50) -> Quitar comas
             cleaned = cleaned.replace(',', '')
         else:
-            # Formato Latino/Español (1.250.000,50) -> Quitar puntos, cambiar coma por punto
             cleaned = cleaned.replace('.', '').replace(',', '.')
-            
-    # Caso 2: Solo tiene comas (Ej: 1,250 o 1250,50)
     elif ',' in cleaned:
-        # Si la coma está en las últimas 3 posiciones, suele ser decimal
         if len(cleaned) - cleaned.rfind(',') <= 3:
             cleaned = cleaned.replace(',', '.')
         else:
             cleaned = cleaned.replace(',', '')
-            
-    # Caso 3: Solo tiene puntos (Ej: 1.250.000) -> Tratándose de Texto sin formato, son miles
     elif '.' in cleaned:
-        # Si tiene un único punto y está al final (ej: 125.50), es decimal, sino es miles
         if cleaned.count('.') == 1 and len(cleaned) - cleaned.rfind('.') <= 3:
-            pass # Mantener como decimal
+            pass
         else:
             cleaned = cleaned.replace('.', '')
             
     try:
         return float(cleaned)
     except:
-        # Intento de rescate usando regex por si quedan letras residuales
         cleaned = re.sub(r'[^\d.-]', '', cleaned)
         try:
             return float(cleaned)
@@ -152,7 +142,7 @@ ID_DATOS_2025 = "1aAl_PX1wpBWgTu9bLc81Wn57jSyt8Kqfwm4B4Fsa1W0"
 ID_INGRESO_PERSONAS = "1H-j4-gudnexcxnbk0oFMHBJNovDOyWOIWZCLaprEdYw"
 ID_INGRESO_BILLETES = "17c6P1pY21SC_xFoLulC7FgvUBz8zj8xz-61gsC-vsaI"
 
-# --- 2. MOTOR DE DATOS CACHEADO ---
+# --- 2. MOTOR DE DATOS EN CACHÉ ---
 @st.cache_data(ttl=60)
 def load_all_data():
     try:
@@ -207,21 +197,27 @@ def load_all_data():
             else: df_p = pd.DataFrame(columns=['fecha', 'cantidad'])
         except: df_p = pd.DataFrame(columns=['fecha', 'cantidad'])
 
-        # 4. Cubo de Ingreso de Billetes
+        # 4. Cubo de Ingreso de Billetes (Mapeo Defensivo de Columnas)
         try:
             sheet_b = client.open_by_key(ID_INGRESO_BILLETES).worksheet("Cubo")
             data_b = sheet_b.get_all_values()
             if data_b and len(data_b) >= 2:
                 df_b = pd.DataFrame(data_b[1:], columns=data_b[0])
-                df_b.columns = [str(c).strip().lower() for c in df_b.columns]
+                # Limpieza base de nombres de columnas
+                df_b.columns = [str(c).strip().lower().replace('\n', ' ') for c in df_b.columns]
                 
-                if 'cuim' in df_b.columns:
-                    df_b = df_b.rename(columns={'cuim': 'asset_id'})
+                # Búsqueda inteligente de la columna indentificadora de la máquina (Evita KeyError)
+                col_maquina = next((c for c in df_b.columns if 'cuim' in c or 'asset' in c or 'maq' in c), None)
+                if col_maquina:
+                    df_b = df_b.rename(columns={col_maquina: 'asset_id'})
+                else:
+                    # Si no encuentra ninguna, asignamos la primera columna por defecto para no romper el flujo
+                    df_b = df_b.rename(columns={df_b.columns[0]: 'asset_id'})
                 
                 df_b['fecha'] = pd.to_datetime(df_b['fecha'], dayfirst=True, errors='coerce').dt.date
                 df_b = df_b.dropna(subset=['fecha'])
                 
-                # Convertir a flotantes todas las columnas excepto llaves de texto
+                # Sanitizar numéricamente de forma estricta todas las columnas
                 for col in df_b.columns:
                     if col not in ['fecha', 'asset_id', 'marca', 'modelo', 'juego', 'fabricante']:
                         df_b[col] = df_b[col].apply(clean_numeric_string)
@@ -337,7 +333,7 @@ if df_users is not None and not df_users.empty:
                     st.dataframe(df_comp.rename(columns={'asset_id':'Q'}).sort_values('win', ascending=False)[['marca', 'Q', 'Hold %']], use_container_width=True, height=180, hide_index=True)
                     st.markdown("</div>", unsafe_allow_html=True)
 
-                # Monitoreo
+                # Monitoreo Algorítmico
                 st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
                 st.markdown("<div class='panel-header'>🤖 Monitoreo Algorítmico de Sala</div>", unsafe_allow_html=True)
                 a1, a2, a3, a4 = st.columns(4)
@@ -365,7 +361,7 @@ if df_users is not None and not df_users.empty:
                         st.plotly_chart(fig_pers, use_container_width=True)
 
         # =========================================================================
-        # 2. VISTA: CONTROL DE BILLETES (REPARADO, MÉTRICAS Y TABLAS EXACTAS)
+        # 2. VISTA: CONTROL DE BILLETES (BLINDADA CONTRA ERRORES DE COLUMNAS)
         # =========================================================================
         elif nav == "💵 Control de Billetes":
             st.subheader("Reporte Avanzado de Drop Físico por CUIM / N° Máquina")
@@ -373,26 +369,31 @@ if df_users is not None and not df_users.empty:
             if df_billetes is not None and not df_billetes.empty:
                 st.markdown("<div class='filter-bar'>", unsafe_allow_html=True)
                 fb_col1, fb_col2 = st.columns([1.5, 3.5])
-                with fb_col1: fb_rango = st.date_input("Filtrar Rango Billetes", [df_billetes['fecha'].min(), df_billetes['fecha'].max()], label_visibility="collapsed")
-                with fb_col2: fb_id = st.multiselect("Filtrar por CUIM", sorted(df_billetes['asset_id'].unique()), placeholder="🆔 Seleccionar CUIM...", label_visibility="collapsed")
+                with fb_col1: 
+                    fb_rango = st.date_input("Filtrar Rango Billetes", [df_billetes['fecha'].min(), df_billetes['fecha'].max()], label_visibility="collapsed")
+                with fb_col2: 
+                    fb_id = st.multiselect("Filtrar por CUIM", sorted(df_billetes['asset_id'].unique()), placeholder="🆔 Seleccionar CUIM...", label_visibility="collapsed")
                 st.markdown("</div>", unsafe_allow_html=True)
                 
                 df_b_f = df_billetes.copy()
                 if isinstance(fb_rango, (list, tuple)) and len(fb_rango) == 2:
                     df_b_f = df_b_f[(df_b_f['fecha'] >= fb_rango[0]) & (df_b_f['fecha'] <= fb_rango[1])]
-                if fb_id: df_b_f = df_b_f[df_b_f['asset_id'].isin(fb_id)]
+                if fb_id: 
+                    df_b_f = df_b_f[df_b_f['asset_id'].isin(fb_id)]
                 
-                # Columnas específicas del gráfico solicitadas por el usuario
+                # Columnas de denominaciones puras para el Gráfico de Barras
                 col_denominaciones = ['bills 100', 'bills 200', 'bills 500', 'bills 1000', 'bills 2000', 'bills 10000', 'bills 20000']
-                col_denominaciones = [c for c in col_denominaciones if c in df_b_f.columns]
+                col_denominaciones_existentes = [c for c in col_denominaciones if c in df_b_f.columns]
                 
-                # Rescate exacto de las columnas de totales
+                # Cálculo de KPIs Principales basados en las columnas correctas
                 total_pesos_drop = df_b_f['total pesos'].sum() if 'total pesos' in df_b_f.columns else 0.0
                 total_piezas_físicas = df_b_f['total bills'].sum() if 'total bills' in df_b_f.columns else 0.0
 
                 bk1, bk2 = st.columns(2)
-                with bk1: st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Total Recaudado en Pesos (Total Pesos)</div><div class='kpi-value' style='color:#00ffcc;'>{form_num(total_pesos_drop)}</div></div>", unsafe_allow_html=True)
-                with bk2: st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Cantidad Total de Billetes Físicos (Total Bills)</div><div class='kpi-value'>{total_piezas_físicas:,.0f} u.</div></div>", unsafe_allow_html=True)
+                with bk1: 
+                    st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Total Recaudado en Pesos (Total Pesos)</div><div class='kpi-value' style='color:#00ffcc;'>{form_num(total_pesos_drop)}</div></div>", unsafe_allow_html=True)
+                with bk2: 
+                    st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Cantidad Total de Billetes Físicos (Total Bills)</div><div class='kpi-value'>{total_piezas_físicas:,.0f} u.</div></div>", unsafe_allow_html=True)
                 
                 st.write("")
                 bg_col1, bg_col2 = st.columns([2.1, 1.9])
@@ -401,43 +402,71 @@ if df_users is not None and not df_users.empty:
                     st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
                     st.markdown("<div class='panel-header'>💵 Resumen Contable y Retenciones impositivas</div>", unsafe_allow_html=True)
                     
-                    columnas_agrupar = ['total pesos', 'retencion teorica', 'retencion real', 'diferencia retencion']
-                    columnas_existentes = [c for c in columnas_agrupar if c in df_b_f.columns]
+                    # Definimos de forma segura las columnas contables que queremos agrupar
+                    columnas_financieras = []
+                    for c in ['total pesos', 'retencion teorica', 'retencion real', 'diferencia retencion']:
+                        if c in df_b_f.columns:
+                            columnas_financieras.append(c)
                     
-                    if 'total pesos' in df_b_f.columns:
-                        df_resumen_maq = df_b_f.groupby('asset_id')[columnas_existentes].sum().reset_index()
-                        df_resumen_maq.columns = ['CUIM', 'Total Pesos', 'Ret. Teórica', 'Ret. Real', 'Dif. Retención']
+                    if columnas_financieras:
+                        # Hacemos el groupby de forma dinámica para evitar desajustes de tamaño de vectores
+                        df_resumen_maq = df_b_f.groupby('asset_id')[columnas_financieras].sum().reset_index()
+                        
+                        # Mapeo controlado de nombres visibles
+                        mapeo_columnas_tabla = {
+                            'asset_id': 'CUIM',
+                            'total pesos': 'Total Pesos',
+                            'retencion teorica': 'Ret. Teórica',
+                            'retencion real': 'Ret. Real',
+                            'diferencia retencion': 'Dif. Retención'
+                        }
+                        df_resumen_maq = df_resumen_maq.rename(columns=mapeo_columnas_tabla)
+                        
+                        # Generamos los formateadores solo para las columnas que realmente se calcularon
+                        formatos_tabla = {}
+                        for col_tabla in df_resumen_maq.columns:
+                            if col_tabla != 'CUIM':
+                                formatos_tabla[col_tabla] = lambda x: form_num(x)
                         
                         st.dataframe(
-                            df_resumen_maq.style.format({
-                                'Total Pesos': lambda x: form_num(x),
-                                'Ret. Teórica': lambda x: form_num(x),
-                                'Ret. Real': lambda x: form_num(x),
-                                'Dif. Retención': lambda x: form_num(x),
-                            }), use_container_width=True, height=300, hide_index=True
+                            df_resumen_maq.style.format(formatos_tabla), 
+                            use_container_width=True, 
+                            height=300, 
+                            hide_index=True
                         )
-                    else: st.warning("Estructura de columnas incorrecta.")
+                    else: 
+                        st.warning("No se localizaron columnas numéricas financieras válidas en el origen.")
                     st.markdown("</div>", unsafe_allow_html=True)
                     
                 with bg_col2:
                     st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
                     st.markdown("<div class='panel-header'>📊 Unidades por Denominación Reales</div>", unsafe_allow_html=True)
                     
-                    if col_denominaciones:
-                        mapeo_nombres = {
+                    if col_denominaciones_existentes:
+                        mapeo_nombres_grafico = {
                             'bills 100': '$100', 'bills 200': '$200', 'bills 500': '$500',
                             'bills 1000': '$1.000', 'bills 2000': '$2.000', 'bills 10000': '$10.000', 'bills 20000': '$20.000'
                         }
-                        df_denom = df_b_f[col_denominaciones].sum().reset_index()
+                        df_denom = df_b_f[col_denominaciones_existentes].sum().reset_index()
                         df_denom.columns = ['interno', 'Cantidad de Billetes']
-                        df_denom['Denominación'] = df_denom['interno'].map(mapeo_nombres)
+                        df_denom['Denominación'] = df_denom['interno'].map(mapeo_nombres_grafico)
                         
-                        fig_denom = px.bar(df_denom, x='Denominación', y='Cantidad de Billetes', text_auto=',.0f', template="plotly_dark", color_discrete_sequence=['#00D1FF'])
+                        fig_denom = px.bar(
+                            df_denom, 
+                            x='Denominación', 
+                            y='Cantidad de Billetes', 
+                            text_auto=',.0f', 
+                            template="plotly_dark", 
+                            color_discrete_sequence=['#00D1FF']
+                        )
                         fig_denom.update_layout(margin=dict(l=10, r=10, t=15, b=10), height=280, xaxis_title=None, yaxis_title=None)
                         fig_denom.update_traces(textposition='outside')
                         st.plotly_chart(fig_denom, use_container_width=True)
-                    else: st.info("Sin registros.")
+                    else: 
+                        st.info("No se encontraron las columnas de denominación física ('bills XXX') en el origen.")
                     st.markdown("</div>", unsafe_allow_html=True)
+            else:
+                st.error("Error al enlazar o leer la matriz 'Cubo' del libro de Billetes.")
 
         # =========================================================================
         # 3. VISTA: ANALISTA COMPARATIVO
