@@ -100,10 +100,9 @@ def form_num(valor):
         return "$ 0"
 
 def clean_numeric_string(val):
-    """Limpia textos sin formato, remueve espacios y convierte a flotante puro"""
+    """Limpia textos sin formato, remueve puntos de miles regionales y convierte a float"""
     if not val or str(val).strip() == "": 
         return 0.0
-    # Remover todo lo que no sea número, punto, coma o signo menos
     cleaned = re.sub(r'[^\d.,-]', '', str(val).strip())
     if ',' in cleaned and '.' in cleaned:
         cleaned = cleaned.replace('.', '').replace(',', '.')
@@ -142,7 +141,12 @@ def load_all_data():
                 data = sheet.get_all_values()
                 if not data: return pd.DataFrame()
                 df = pd.DataFrame(data[1:], columns=data[0])
-                df.columns = [str(c).strip().lower() for c in df.columns]  # Todo a minúsculas
+                df.columns = [str(c).strip().lower() for c in df.columns]
+                
+                # Mapeo inteligente para la columna identificadora de máquina
+                if 'cuim' in df.columns:
+                    df = df.rename(columns={'cuim': 'asset_id'})
+                
                 df = df.loc[:, ~df.columns.str.contains('^$|Unnamed', case=False, na=False)]
                 df['fecha'] = pd.to_datetime(df['fecha'], dayfirst=True, errors='coerce').dt.date
                 return df.dropna(subset=['fecha'])
@@ -153,7 +157,6 @@ def load_all_data():
         df_2026 = get_cubo_data(ID_DATOS_2026)
         df_s = pd.concat([df_2025, df_2026], ignore_index=True)
         
-        # Limpieza de columnas financieras en Slots
         for col in ['coin_in', 'win', 'jackpot']:
             if col in df_s.columns:
                 df_s[col] = df_s[col].apply(clean_numeric_string)
@@ -185,18 +188,28 @@ def load_all_data():
         except:
             df_p = pd.DataFrame(columns=['fecha', 'cantidad'])
 
-        # 4. Cubo de Ingreso de Billetes 2026
+        # 4. Cubo de Ingreso de Billetes 2026 (CORREGIDO CON NORMALIZACIÓN DE CUIM)
         try:
             sheet_b = client.open_by_key(ID_INGRESO_BILLETES).worksheet("Cubo")
             data_b = sheet_b.get_all_values()
             if data_b and len(data_b) >= 2:
                 df_b = pd.DataFrame(data_b[1:], columns=data_b[0])
-                df_b.columns = [str(c).strip().lower() for c in df_b.columns] # Forzar minúsculas estructurales
+                df_b.columns = [str(c).strip().lower() for c in df_b.columns]
+                
+                # Homologación crítica de CUIM -> asset_id
+                if 'cuim' in df_b.columns:
+                    df_b = df_b.rename(columns={'cuim': 'asset_id'})
+                elif 'asset_id' not in df_b.columns:
+                    # Si no encuentra ninguna, busca la primera columna que empiece por 'asset'
+                    for c in df_b.columns:
+                        if 'asset' in c:
+                            df_b = df_b.rename(columns={c: 'asset_id'})
+                            break
                 
                 df_b['fecha'] = pd.to_datetime(df_b['fecha'], dayfirst=True, errors='coerce').dt.date
                 df_b = df_b.dropna(subset=['fecha'])
                 
-                # Forzar la conversión limpia de texto sin formato a float
+                # Conversión matemática de todos los campos de texto a floats
                 for col in df_b.columns:
                     if col not in ['fecha', 'asset_id', 'marca', 'modelo', 'juego']:
                         df_b[col] = df_b[col].apply(clean_numeric_string)
@@ -381,7 +394,7 @@ if df_users is not None and not df_users.empty:
                 st.error("Error al mapear la base de datos 'Cubo'.")
 
         # =========================================================================
-        # VISTA: CONTROL DE BILLETES (REPARADA)
+        # VISTA: CONTROL DE BILLETES (REPARADA CONTRA EL NOMBRE 'CUIM')
         # =========================================================================
         elif nav == "💵 Control de Billetes":
             st.subheader("Reporte Avanzado de Drop Físico por CUIM / N° Máquina")
