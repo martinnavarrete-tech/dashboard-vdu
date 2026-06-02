@@ -7,7 +7,7 @@ import plotly.express as px
 import re
 from datetime import datetime, timedelta
 
-# --- 1. CONFIGURACIÓN Y ESTILOS AVANZADOS (ESTILO SIELCON) ---
+# --- 1. CONFIGURACIÓN Y ESTILOS AVANZADOS (SIELCON DESIGN) ---
 st.set_page_config(page_title="Dashboard VDU", layout="wide", page_icon="🎰")
 
 st.markdown("""
@@ -60,7 +60,7 @@ st.markdown("""
     }
     .kpi-value {
         color: #ffffff;
-        font-size: 1.9rem;
+        font-size: 1.75rem;
         font-weight: 800;
         line-height: 1.1;
     }
@@ -101,15 +101,10 @@ def form_num(valor):
         return "$ 0"
 
 def clean_numeric_string(val):
-    """
-    Parsea cadenas de texto con irregularidades en puntos/comas de miles y decimales.
-    Fuerza la conversión limpia eliminando signos monetarios o espacios.
-    """
+    """Limpia textos sin formato de Google Sheets eliminando símbolos corruptos de strings."""
     if not val or str(val).strip() == "": 
         return 0.0
-    
     cleaned = str(val).strip().replace('$', '').replace(' ', '')
-    
     if ',' in cleaned and '.' in cleaned:
         if cleaned.rfind('.') > cleaned.rfind(','):
             cleaned = cleaned.replace(',', '')
@@ -125,7 +120,6 @@ def clean_numeric_string(val):
             pass
         else:
             cleaned = cleaned.replace('.', '')
-            
     try:
         return float(cleaned)
     except:
@@ -180,7 +174,7 @@ def load_all_data():
             if col in df_s.columns:
                 df_s[col] = df_s[col].apply(clean_numeric_string)
 
-        # 3. Asistencia / Ocupación
+        # 3. Asistencia
         try:
             sheet_p = client.open_by_key(ID_INGRESO_PERSONAS).get_worksheet(0)
             data_p = sheet_p.get_all_values()
@@ -197,27 +191,23 @@ def load_all_data():
             else: df_p = pd.DataFrame(columns=['fecha', 'cantidad'])
         except: df_p = pd.DataFrame(columns=['fecha', 'cantidad'])
 
-        # 4. Cubo de Ingreso de Billetes (Mapeo Defensivo de Columnas)
+        # 4. Cubo de Ingreso de Billetes
         try:
             sheet_b = client.open_by_key(ID_INGRESO_BILLETES).worksheet("Cubo")
             data_b = sheet_b.get_all_values()
             if data_b and len(data_b) >= 2:
                 df_b = pd.DataFrame(data_b[1:], columns=data_b[0])
-                # Limpieza base de nombres de columnas
                 df_b.columns = [str(c).strip().lower().replace('\n', ' ') for c in df_b.columns]
                 
-                # Búsqueda inteligente de la columna indentificadora de la máquina (Evita KeyError)
                 col_maquina = next((c for c in df_b.columns if 'cuim' in c or 'asset' in c or 'maq' in c), None)
                 if col_maquina:
                     df_b = df_b.rename(columns={col_maquina: 'asset_id'})
                 else:
-                    # Si no encuentra ninguna, asignamos la primera columna por defecto para no romper el flujo
                     df_b = df_b.rename(columns={df_b.columns[0]: 'asset_id'})
                 
                 df_b['fecha'] = pd.to_datetime(df_b['fecha'], dayfirst=True, errors='coerce').dt.date
                 df_b = df_b.dropna(subset=['fecha'])
                 
-                # Sanitizar numéricamente de forma estricta todas las columnas
                 for col in df_b.columns:
                     if col not in ['fecha', 'asset_id', 'marca', 'modelo', 'juego', 'fabricante']:
                         df_b[col] = df_b[col].apply(clean_numeric_string)
@@ -264,12 +254,13 @@ if df_users is not None and not df_users.empty:
         safe_max = df_slots['fecha'].max() if df_slots is not None and not df_slots.empty else datetime.now().date()
 
         # =========================================================================
-        # 1. VISTA: DASHBOARD DE SALA
+        # 1. VISTA: DASHBOARD DE SALA (REDISEÑADA, CON DESPLEGABLES Y DROP INTEGRADO)
         # =========================================================================
         if nav == "📊 Dashboard de Sala":
             st.subheader("Dashboard Fuente Mayor VDU")
             
             if df_slots is not None and not df_slots.empty:
+                # Barra de Filtros Unificada
                 st.markdown("<div class='filter-bar'>", unsafe_allow_html=True)
                 f_col1, f_col2, f_col3, f_col4, f_col5 = st.columns([1.2, 1, 1, 1, 1])
                 with f_col1: f_rango = st.date_input("Ventana Temporal", [safe_min, safe_max], label_visibility="collapsed")
@@ -279,6 +270,7 @@ if df_users is not None and not df_users.empty:
                 with f_col5: f_juego = st.multiselect("Juego", sorted(df_slots['juego'].unique()), placeholder="🎮 Juego", label_visibility="collapsed")
                 st.markdown("</div>", unsafe_allow_html=True)
                 
+                # Filtrado de DataFrames de forma sincronizada
                 df_f = df_slots.copy()
                 if isinstance(f_rango, (list, tuple)) and len(f_rango) == 2:
                     df_f = df_f[(df_f['fecha'] >= f_rango[0]) & (df_f['fecha'] <= f_rango[1])]
@@ -291,49 +283,34 @@ if df_users is not None and not df_users.empty:
                 if not df_p_f.empty and isinstance(f_rango, (list, tuple)) and len(f_rango) == 2:
                     df_p_f = df_p_f[(df_p_f['fecha'] >= f_rango[0]) & (df_p_f['fecha'] <= f_rango[1])]
 
+                # Filtrado paralelo seguro para el cruzamiento de Drop Físico
+                drop_periodo_pesos = 0.0
+                if df_billetes is not None and not df_billetes.empty and 'total pesos' in df_billetes.columns:
+                    df_b_f = df_billetes.copy()
+                    if isinstance(f_rango, (list, tuple)) and len(f_rango) == 2:
+                        df_b_f = df_b_f[(df_b_f['fecha'] >= f_rango[0]) & (df_b_f['fecha'] <= f_rango[1])]
+                    if f_id: 
+                        df_b_f = df_b_f[df_b_f['asset_id'].isin(f_id)]
+                    drop_periodo_pesos = df_b_f['total pesos'].sum()
+
+                # Cálculos de métricas clave de Sala
                 wt = df_f['win'].sum()
                 ct = df_f['coin_in'].sum()
                 ht = (wt / ct * 100) if ct > 0 else 0
                 asistencia = df_p_f['cantidad'].sum() if not df_p_f.empty else 0
                 win_persona = (wt / asistencia) if asistencia > 0 else 0
 
-                k_col1, k_col2, k_col3, k_col4 = st.columns(4)
+                # Renderizado de la fila de KPIs de Alto Impacto (Se agrega Drop)
+                k_col1, k_col2, k_col3, k_col4, k_col5 = st.columns(5)
                 with k_col1: st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Net Win Total</div><div class='kpi-value'>{form_num(wt)}</div></div>", unsafe_allow_html=True)
                 with k_col2: st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Coin In</div><div class='kpi-value'>{form_num(ct)}</div></div>", unsafe_allow_html=True)
                 with k_col3: st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Hold Real %</div><div class='kpi-value' style='color:#00ffcc;'>{ht:.2f}%</div></div>", unsafe_allow_html=True)
-                with k_col4: st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Ocupación / Tráfico</div><div class='kpi-value' style='color:#ff9f43;'>{asistencia:,.0f}</div><div class='kpi-subtext'>EFF: {form_num(win_persona)} x PAX</div></div>", unsafe_allow_html=True)
+                with k_col4: st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>💵 Drop Físico</div><div class='kpi-value' style='color:#00d1ff;'>{form_num(drop_periodo_pesos)}</div></div>", unsafe_allow_html=True)
+                with k_col5: st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Ocupación / Tráfico</div><div class='kpi-value' style='color:#ff9f43;'>{asistencia:,.0f}</div><div class='kpi-subtext'>EFF: {form_num(win_persona)} x PAX</div></div>", unsafe_allow_html=True)
 
                 st.write("")
-                m_col1, m_col2, m_col3 = st.columns([1.4, 1.3, 1.3])
-                with m_col1:
-                    st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
-                    st.markdown("<div class='panel-header'>🚫 Máquinas sin Actividad</div>", unsafe_allow_html=True)
-                    sin_juego = df_f.groupby('asset_id')['coin_in'].sum()
-                    sin_juego = sin_juego[sin_juego == 0].index.tolist()
-                    if sin_juego:
-                        df_sj = df_f[df_f['asset_id'].isin(sin_juego)][['asset_id', 'marca', 'modelo', 'juego']].drop_duplicates()
-                        st.dataframe(df_sj.rename(columns={'asset_id': 'CUIM'}), use_container_width=True, height=180, hide_index=True)
-                    else: st.success("Operación óptima: 0 máquinas inactivas.")
-                    st.markdown("</div>", unsafe_allow_html=True)
 
-                with m_col2:
-                    st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
-                    st.markdown("<div class='panel-header'>💎 Jackpots Mayores > 1M</div>", unsafe_allow_html=True)
-                    altos_premios = df_f[df_f['jackpot'] >= 1000000][['fecha', 'asset_id', 'jackpot']]
-                    if not altos_premios.empty:
-                        st.dataframe(altos_premios.rename(columns={'asset_id':'CUIM'}).sort_values('jackpot', ascending=False), use_container_width=True, height=180, hide_index=True)
-                    else: st.info("Sin registros de premios especiales.")
-                    st.markdown("</div>", unsafe_allow_html=True)
-
-                with m_col3:
-                    st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
-                    st.markdown("<div class='panel-header'>📊 Rendimiento por Fabricante</div>", unsafe_allow_html=True)
-                    df_comp = df_f.groupby('marca').agg({'win': 'sum', 'coin_in': 'sum', 'asset_id': 'nunique'}).reset_index()
-                    df_comp['Hold %'] = (df_comp['win'] / df_comp['coin_in'] * 100).round(2)
-                    st.dataframe(df_comp.rename(columns={'asset_id':'Q'}).sort_values('win', ascending=False)[['marca', 'Q', 'Hold %']], use_container_width=True, height=180, hide_index=True)
-                    st.markdown("</div>", unsafe_allow_html=True)
-
-                # Monitoreo Algorítmico
+                # Monitoreo Algorítmico Avanzado (Se mantiene arriba por su gran valor de lectura rápida)
                 st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
                 st.markdown("<div class='panel-header'>🤖 Monitoreo Algorítmico de Sala</div>", unsafe_allow_html=True)
                 a1, a2, a3, a4 = st.columns(4)
@@ -348,20 +325,51 @@ if df_users is not None and not df_users.empty:
                 with a4: st.markdown(f"<div class='analyst-box'><div class='analyst-title'>Eficiencia Media</div><div class='analyst-text'>Rendimiento medio por terminal: <b>{form_num(wt / len(df_f['asset_id'].unique()) if len(df_f['asset_id'].unique())>0 else 0)}</b>.</div></div>", unsafe_allow_html=True)
                 st.markdown("</div>", unsafe_allow_html=True)
 
+                # Bloque de Gráficos de Tendencias (Ahora suben de prioridad)
                 g_col1, g_col2 = st.columns(2)
                 with g_col1:
+                    st.caption("📈 Evolución del Rendimiento Diario de Sala (Slots)")
                     df_time = df_f.groupby('fecha')[['win', 'coin_in']].sum().reset_index().melt(id_vars='fecha', value_vars=['win', 'coin_in'], var_name='Métrica', value_name='Monto')
                     fig_slots = px.area(df_time, x='fecha', y='Monto', color='Métrica', template="plotly_dark", color_discrete_map={'win': '#00D1FF', 'coin_in': '#FF4B4B'})
-                    fig_slots.update_layout(margin=dict(l=10, r=10, t=5, b=5), height=200, xaxis_title=None, yaxis_title=None)
+                    fig_slots.update_layout(margin=dict(l=10, r=10, t=5, b=5), height=230, xaxis_title=None, yaxis_title=None)
                     st.plotly_chart(fig_slots, use_container_width=True)
                 with g_col2:
+                    st.caption("👥 Curva de Asistencia Diaria (Tráfico)")
                     if not df_p_f.empty:
                         fig_pers = px.bar(df_p_f.groupby('fecha')['cantidad'].sum().reset_index(), x='fecha', y='cantidad', template="plotly_dark", color_discrete_sequence=['#FF9F43'])
-                        fig_pers.update_layout(margin=dict(l=10, r=10, t=5, b=5), height=200, xaxis_title=None, yaxis_title=None)
+                        fig_pers.update_layout(margin=dict(l=10, r=10, t=5, b=5), height=230, xaxis_title=None, yaxis_title=None)
                         st.plotly_chart(fig_pers, use_container_width=True)
+                    else:
+                        st.info("No hay registros de asistencia para las fechas seleccionadas.")
+
+                st.write("")
+                
+                # --- NUEVA ESTRUCTURA DE DESPLEGABLES PARA MEJORAR EL ORDEN ---
+                st.markdown("### 📋 Desglose Técnico y Reportes de Auditoría de Sala")
+                
+                with st.expander("🚫 Ver Máquinas sin Actividad / Rendimiento Cero", expanded=False):
+                    sin_juego = df_f.groupby('asset_id')['coin_in'].sum()
+                    sin_juego = sin_juego[sin_juego == 0].index.tolist()
+                    if sin_juego:
+                        df_sj = df_f[df_f['asset_id'].isin(sin_juego)][['asset_id', 'marca', 'modelo', 'juego']].drop_duplicates()
+                        st.dataframe(df_sj.rename(columns={'asset_id': 'CUIM'}), use_container_width=True, height=200, hide_index=True)
+                    else: 
+                        st.success("Operación óptima: 0 máquinas inactivas registradas en este periodo.")
+
+                with st.expander("💎 Ver Detalle de Jackpots Mayores > $ 1.000.000", expanded=False):
+                    altos_premios = df_f[df_f['jackpot'] >= 1000000][['fecha', 'asset_id', 'jackpot']]
+                    if not altos_premios.empty:
+                        st.dataframe(altos_premios.rename(columns={'asset_id':'CUIM'}).sort_values('jackpot', ascending=False), use_container_width=True, height=200, hide_index=True)
+                    else: 
+                        st.info("Sin registros de premios especiales entregados mayores a un millón.")
+
+                with st.expander("📊 Ver Resumen Analítico de Rendimiento por Fabricante (Hold %)", expanded=False):
+                    df_comp = df_f.groupby('marca').agg({'win': 'sum', 'coin_in': 'sum', 'asset_id': 'nunique'}).reset_index()
+                    df_comp['Hold %'] = (df_comp['win'] / df_comp['coin_in'] * 100).round(2)
+                    st.dataframe(df_comp.rename(columns={'asset_id':'Cantidad Maq'}).sort_values('win', ascending=False)[['marca', 'Cantidad Maq', 'Hold %']], use_container_width=True, height=200, hide_index=True)
 
         # =========================================================================
-        # 2. VISTA: CONTROL DE BILLETES (BLINDADA CONTRA ERRORES DE COLUMNAS)
+        # 2. VISTA: CONTROL DE BILLETES
         # =========================================================================
         elif nav == "💵 Control de Billetes":
             st.subheader("Reporte Avanzado de Drop Físico por CUIM / N° Máquina")
@@ -369,31 +377,24 @@ if df_users is not None and not df_users.empty:
             if df_billetes is not None and not df_billetes.empty:
                 st.markdown("<div class='filter-bar'>", unsafe_allow_html=True)
                 fb_col1, fb_col2 = st.columns([1.5, 3.5])
-                with fb_col1: 
-                    fb_rango = st.date_input("Filtrar Rango Billetes", [df_billetes['fecha'].min(), df_billetes['fecha'].max()], label_visibility="collapsed")
-                with fb_col2: 
-                    fb_id = st.multiselect("Filtrar por CUIM", sorted(df_billetes['asset_id'].unique()), placeholder="🆔 Seleccionar CUIM...", label_visibility="collapsed")
+                with fb_col1: fb_rango = st.date_input("Filtrar Rango Billetes", [df_billetes['fecha'].min(), df_billetes['fecha'].max()], label_visibility="collapsed")
+                with fb_col2: fb_id = st.multiselect("Filtrar por CUIM", sorted(df_billetes['asset_id'].unique()), placeholder="🆔 Seleccionar CUIM...", label_visibility="collapsed")
                 st.markdown("</div>", unsafe_allow_html=True)
                 
                 df_b_f = df_billetes.copy()
                 if isinstance(fb_rango, (list, tuple)) and len(fb_rango) == 2:
                     df_b_f = df_b_f[(df_b_f['fecha'] >= fb_rango[0]) & (df_b_f['fecha'] <= fb_rango[1])]
-                if fb_id: 
-                    df_b_f = df_b_f[df_b_f['asset_id'].isin(fb_id)]
+                if fb_id: df_b_f = df_b_f[df_b_f['asset_id'].isin(fb_id)]
                 
-                # Columnas de denominaciones puras para el Gráfico de Barras
                 col_denominaciones = ['bills 100', 'bills 200', 'bills 500', 'bills 1000', 'bills 2000', 'bills 10000', 'bills 20000']
                 col_denominaciones_existentes = [c for c in col_denominaciones if c in df_b_f.columns]
                 
-                # Cálculo de KPIs Principales basados en las columnas correctas
                 total_pesos_drop = df_b_f['total pesos'].sum() if 'total pesos' in df_b_f.columns else 0.0
                 total_piezas_físicas = df_b_f['total bills'].sum() if 'total bills' in df_b_f.columns else 0.0
 
                 bk1, bk2 = st.columns(2)
-                with bk1: 
-                    st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Total Recaudado en Pesos (Total Pesos)</div><div class='kpi-value' style='color:#00ffcc;'>{form_num(total_pesos_drop)}</div></div>", unsafe_allow_html=True)
-                with bk2: 
-                    st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Cantidad Total de Billetes Físicos (Total Bills)</div><div class='kpi-value'>{total_piezas_físicas:,.0f} u.</div></div>", unsafe_allow_html=True)
+                with bk1: st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Total Recaudado en Pesos (Total Pesos)</div><div class='kpi-value' style='color:#00ffcc;'>{form_num(total_pesos_drop)}</div></div>", unsafe_allow_html=True)
+                with bk2: st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Cantidad Total de Billetes Físicos (Total Bills)</div><div class='kpi-value'>{total_piezas_físicas:,.0f} u.</div></div>", unsafe_allow_html=True)
                 
                 st.write("")
                 bg_col1, bg_col2 = st.columns([2.1, 1.9])
@@ -402,71 +403,30 @@ if df_users is not None and not df_users.empty:
                     st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
                     st.markdown("<div class='panel-header'>💵 Resumen Contable y Retenciones impositivas</div>", unsafe_allow_html=True)
                     
-                    # Definimos de forma segura las columnas contables que queremos agrupar
-                    columnas_financieras = []
-                    for c in ['total pesos', 'retencion teorica', 'retencion real', 'diferencia retencion']:
-                        if c in df_b_f.columns:
-                            columnas_financieras.append(c)
-                    
+                    columnas_financieras = [c for c in ['total pesos', 'retencion teorica', 'retencion real', 'diferencia retencion'] if c in df_b_f.columns]
                     if columnas_financieras:
-                        # Hacemos el groupby de forma dinámica para evitar desajustes de tamaño de vectores
                         df_resumen_maq = df_b_f.groupby('asset_id')[columnas_financieras].sum().reset_index()
-                        
-                        # Mapeo controlado de nombres visibles
-                        mapeo_columnas_tabla = {
-                            'asset_id': 'CUIM',
-                            'total pesos': 'Total Pesos',
-                            'retencion teorica': 'Ret. Teórica',
-                            'retencion real': 'Ret. Real',
-                            'diferencia retencion': 'Dif. Retención'
-                        }
+                        mapeo_columnas_tabla = {'asset_id': 'CUIM', 'total pesos': 'Total Pesos', 'retencion teorica': 'Ret. Teórica', 'retencion real': 'Ret. Real', 'diferencia retencion': 'Dif. Retención'}
                         df_resumen_maq = df_resumen_maq.rename(columns=mapeo_columnas_tabla)
+                        formatos_tabla = {col_tabla: lambda x: form_num(x) for col_tabla in df_resumen_maq.columns if col_tabla != 'CUIM'}
                         
-                        # Generamos los formateadores solo para las columnas que realmente se calcularon
-                        formatos_tabla = {}
-                        for col_tabla in df_resumen_maq.columns:
-                            if col_tabla != 'CUIM':
-                                formatos_tabla[col_tabla] = lambda x: form_num(x)
-                        
-                        st.dataframe(
-                            df_resumen_maq.style.format(formatos_tabla), 
-                            use_container_width=True, 
-                            height=300, 
-                            hide_index=True
-                        )
-                    else: 
-                        st.warning("No se localizaron columnas numéricas financieras válidas en el origen.")
+                        st.dataframe(df_resumen_maq.style.format(formatos_tabla), use_container_width=True, height=300, hide_index=True)
                     st.markdown("</div>", unsafe_allow_html=True)
                     
                 with bg_col2:
                     st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
                     st.markdown("<div class='panel-header'>📊 Unidades por Denominación Reales</div>", unsafe_allow_html=True)
-                    
                     if col_denominaciones_existentes:
-                        mapeo_nombres_grafico = {
-                            'bills 100': '$100', 'bills 200': '$200', 'bills 500': '$500',
-                            'bills 1000': '$1.000', 'bills 2000': '$2.000', 'bills 10000': '$10.000', 'bills 20000': '$20.000'
-                        }
+                        mapeo_nombres_grafico = {'bills 100': '$100', 'bills 200': '$200', 'bills 500': '$500', 'bills 1000': '$1.000', 'bills 2000': '$2.000', 'bills 10000': '$10.000', 'bills 20000': '$20.000'}
                         df_denom = df_b_f[col_denominaciones_existentes].sum().reset_index()
                         df_denom.columns = ['interno', 'Cantidad de Billetes']
                         df_denom['Denominación'] = df_denom['interno'].map(mapeo_nombres_grafico)
                         
-                        fig_denom = px.bar(
-                            df_denom, 
-                            x='Denominación', 
-                            y='Cantidad de Billetes', 
-                            text_auto=',.0f', 
-                            template="plotly_dark", 
-                            color_discrete_sequence=['#00D1FF']
-                        )
+                        fig_denom = px.bar(df_denom, x='Denominación', y='Cantidad de Billetes', text_auto=',.0f', template="plotly_dark", color_discrete_sequence=['#00D1FF'])
                         fig_denom.update_layout(margin=dict(l=10, r=10, t=15, b=10), height=280, xaxis_title=None, yaxis_title=None)
                         fig_denom.update_traces(textposition='outside')
                         st.plotly_chart(fig_denom, use_container_width=True)
-                    else: 
-                        st.info("No se encontraron las columnas de denominación física ('bills XXX') en el origen.")
                     st.markdown("</div>", unsafe_allow_html=True)
-            else:
-                st.error("Error al enlazar o leer la matriz 'Cubo' del libro de Billetes.")
 
         # =========================================================================
         # 3. VISTA: ANALISTA COMPARATIVO
