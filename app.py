@@ -115,14 +115,8 @@ def clean_col_vectorized(series: pd.Series) -> pd.Series:
     Parsea de forma segura strings de 'Texto sin formato' de Google Sheets.
     Elimina signos $, espacios y maneja puntos como separadores de miles y comas como decimales.
     """
-    # Pasar a string, quitar espacios y signo pesos
     s = series.astype(str).str.strip().str.replace(r"[$\s]", "", regex=True)
-    
-    # Reemplazar los puntos de miles por vacío y luego la coma decimal por punto decimal de Python
-    # Ejemplo: "3.242.877.628,00" -> "3242877628.00"
     s = s.str.replace(r"\.", "", regex=True).str.replace(",", ".", regex=False)
-    
-    # Convertir a numérico de Python de forma vectorizada
     return pd.to_numeric(s, errors="coerce").fillna(0.0)
 
 def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
@@ -297,7 +291,7 @@ if df_users is not None and not df_users.empty:
     safe_max = df_slots["fecha"].max() if not df_slots.empty else datetime.now().date()
 
     # =========================================================================
-    # VISTA 1: DASHBOARD DE SALA (REORGANIZADO CON DESPLEGABLES Y DROP)
+    # VISTA 1: DASHBOARD DE SALA
     # =========================================================================
     if nav == "📊 Dashboard de Sala":
         st.subheader("Dashboard Fuente Mayor VDU")
@@ -336,7 +330,6 @@ if df_users is not None and not df_users.empty:
         if not df_p_f.empty and isinstance(f_rango, (list, tuple)) and len(f_rango) == 2:
             df_p_f = df_p_f.loc[(df_p_f["fecha"] >= f_rango[0]) & (df_p_f["fecha"] <= f_rango[1])]
 
-        # Cruzamiento dinámico del ingreso de billetes para la vista de Sala
         drop_periodo_pesos = 0.0
         if df_billetes is not None and not df_billetes.empty and "total pesos" in df_billetes.columns:
             df_b_f = df_billetes.copy()
@@ -350,12 +343,12 @@ if df_users is not None and not df_users.empty:
         wt = df_f["win"].sum()
         ct = df_f["coin_in"].sum()
         ht = (wt / ct * 100) if ct > 0 else 0
-        asistencia = df_p_f["whitespace" if df_p_f.empty else "cantidad"].sum() if not df_p_f.empty else 0
+        asistencia = df_p_f["cantidad"].sum() if not df_p_f.empty else 0
         win_persona = (wt / asistencia) if asistencia > 0 else 0
         n_maquinas = df_f["asset_id"].nunique()
         eficiencia_media = wt / n_maquinas if n_maquinas > 0 else 0
 
-        # RENDER KPIs (Se incluye la columna de Drop Físico aquí)
+        # RENDER KPIs
         k1, k2, k3, k4, k5 = st.columns(5)
         with k1: st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Net Win Total</div><div class='kpi-value'>{form_num(wt)}</div></div>", unsafe_allow_html=True)
         with k2: st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Coin In</div><div class='kpi-value'>{form_num(ct)}</div></div>", unsafe_allow_html=True)
@@ -367,7 +360,7 @@ if df_users is not None and not df_users.empty:
 
         st.write("")
 
-        # --- CUADROS DEL ANALISTA (Fijos arriba por su alto valor estratégico) ---
+        # --- CUADROS DEL ANALISTA ---
         st.markdown("<div class='sielcon-panel'>", unsafe_allow_html=True)
         st.markdown("<div class='panel-header'>🤖 Monitoreo Algorítmico de Sala</div>", unsafe_allow_html=True)
         a1, a2, a3, a4 = st.columns(4)
@@ -386,7 +379,7 @@ if df_users is not None and not df_users.empty:
         with a4: st.markdown(f"<div class='analyst-box'><div class='analyst-title'>Eficiencia Media</div><div class='analyst-text'>Rendimiento medio por terminal: <b>{form_num(eficiencia_media)}</b> ({n_maquinas} activas).</div></div>", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # --- SECCIÓN GRÁFICOS (Suben de jerarquía visual al limpiar las tablas) ---
+        # --- SECCIÓN GRÁFICOS ---
         g1, g2 = st.columns(2)
         with g1:
             st.caption("📈 Evolución del Rendimiento Diario de Sala (Slots)")
@@ -402,13 +395,13 @@ if df_users is not None and not df_users.empty:
         with g2:
             st.caption("👥 Curva de Asistencia Diaria (Tráfico)")
             if not df_p_f.empty:
-                fig_pers = px.bar(df_p_f.groupby("fecha")["whitespace" if df_p_f.empty else "cantidad"].sum().reset_index(), x="fecha", y="cantidad", template="plotly_dark", color_discrete_sequence=["#FF9F43"])
+                fig_pers = px.bar(df_p_f.groupby("fecha")["cantidad"].sum().reset_index(), x="fecha", y="cantidad", template="plotly_dark", color_discrete_sequence=["#FF9F43"])
                 fig_pers.update_layout(margin=dict(l=10, r=10, t=5, b=5), height=230, xaxis_title=None, yaxis_title=None)
                 st.plotly_chart(fig_pers, use_container_width=True)
 
         st.write("")
 
-        # --- NUEVA ESTRUCTURA: TABLAS OPERATIVAS DENTRO DE EXPANDERS DESPLEGABLES ---
+        # --- TABLAS OPERATIVAS DENTRO DE EXPANDERS DESPLEGABLES ---
         st.markdown("### 📋 Desglose Técnico y Reportes Auditables de Sala")
 
         with st.expander("🏆 Ranking de Terminales por Net Win", expanded=False):
@@ -417,13 +410,16 @@ if df_users is not None and not df_users.empty:
                 for extra in ["marca", "modelo"]:
                     if extra in df_f.columns: group_cols.append(extra)
                 df_rank = df_f.groupby(group_cols).agg(win=("win", "sum"), coin_in=("coin_in", "sum")).reset_index()
-                df_rank["Hold %"] = (df_rank["win"] / df_rank["coin_in"].where(df_rank["coin_in"] > 0) * 100).round(2)
+                
+                # División segura nativa (Evita pd.NA y sus fallas de redondeo)
+                df_rank["Hold %"] = (df_rank["win"] / df_rank["coin_in"] * 100).fillna(0).round(2)
+                
                 df_rank = df_rank.sort_values("win", ascending=False).head(15)
                 df_rank["Alerta"] = df_rank["Hold %"].apply(lambda h: "🔴 Alto" if h > 15 else ("🟡 Revisar" if h > 10 else "✅ OK"))
                 df_rank_display = df_rank.rename(columns={"asset_id": "CUIM", "win": "Net Win", "coin_in": "Coin In"})
                 df_rank_display["Net Win"] = df_rank_display["Net Win"].apply(form_num)
                 df_rank_display["Coin In"] = df_rank_display["Coin In"].apply(form_num)
-                df_rank_display["Hold %"] = df_rank_display["Hold %"].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else "-")
+                df_rank_display["Hold %"] = df_rank_display["Hold %"].apply(lambda x: f"{x:.2f}%")
                 st.dataframe(df_rank_display, use_container_width=True, height=240, hide_index=True)
 
         with st.expander("📊 Gráfico Analítico de Hold % por Terminal (Outliers)", expanded=False):
@@ -456,12 +452,17 @@ if df_users is not None and not df_users.empty:
         with st.expander("🏬 Resumen General Rendimiento por Fabricante", expanded=False):
             if not df_f.empty and "marca" in df_f.columns:
                 df_comp = df_f.groupby("marca").agg(win=("win", "sum"), coin_in=("coin_in", "sum"), maquinas=("asset_id", "nunique")).reset_index()
-                df_comp["Hold %"] = (df_comp["win"] / df_comp["coin_in"].replace(0, pd.NA) * 100).round(2)
+                
+                # División segura vectorizada con fillna(0) que corrige el bug de image_a441c3.png
+                df_comp["Hold %"] = (df_comp["win"] / df_comp["coin_in"] * 100).fillna(0).round(2)
+                
                 df_comp["win_fmt"] = df_comp["win"].apply(form_num)
+                df_comp["Hold %"] = df_comp["Hold %"].apply(lambda x: f"{x:.2f}%")
+                
                 st.dataframe(df_comp[["marca", "maquinas", "win_fmt", "Hold %"]].rename(columns={"marca": "Marca", "maquinas": "Máquinas Total", "win_fmt": "Net Win"}), use_container_width=True, height=200, hide_index=True)
 
     # =========================================================================
-    # VISTA 2: CONTROL DE BILLETES (CON PARSING TEXTO SIN FORMATO FIJO)
+    # VISTA 2: CONTROL DE BILLETES
     # =========================================================================
     elif nav == "💵 Control de Billetes":
         st.subheader("Reporte Avanzado de Drop Físico por CUIM / N° Máquina")
@@ -485,7 +486,7 @@ if df_users is not None and not df_users.empty:
         if fb_id: df_bf = df_bf.loc[df_bf["asset_id"].isin(fb_id)]
 
         total_pesos = df_bf["total pesos"].sum() if "total pesos" in df_bf.columns else 0.0
-        total_bills = df_bf["total bills"].sum() if "total bills" in df_bf.columns else 0.0
+        total_bills = df_bf["total bills"].sum() if "total pesos" in df_bf.columns else 0.0
 
         bk1, bk2 = st.columns(2)
         with bk1: st.markdown(f"<div class='kpi-wrapper'><div class='kpi-title'>Total Recaudado en Pesos (Drop Físico)</div><div class='kpi-value' style='color:#00ffcc;'>{form_num(total_pesos)}</div></div>", unsafe_allow_html=True)
