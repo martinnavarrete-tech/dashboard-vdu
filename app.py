@@ -116,21 +116,6 @@ def form_num(valor):
         return "$ 0"
 
 
-def normalize_col(name: str) -> str:
-    """Normaliza nombre de columna: minúsculas, sin tildes, sin espacios dobles."""
-    import unicodedata
-    s = str(name).strip().lower()
-    s = unicodedata.normalize("NFD", s)
-    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
-    return s
-
-
-def normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
-    """Aplica normalize_col a todas las columnas de un DataFrame."""
-    df.columns = [normalize_col(c) for c in df.columns]
-    return df
-
-
 def clean_numeric_string(val):
     """Limpia strings de Google Sheets y los convierte a float."""
     if not val or str(val).strip() == "":
@@ -240,7 +225,7 @@ def load_current_data():
             data_p = sheet_p.get_all_values()
             if data_p and len(data_p) >= 2:
                 df_p = pd.DataFrame(data_p[1:], columns=data_p[0])
-                df_p = normalize_cols(df_p)
+                df_p.columns = [str(c).strip().lower() for c in df_p.columns]
                 col_oc = next(
                     (c for c in df_p.columns if "ocupaci" in c or "ocupacion" in c), None
                 )
@@ -261,7 +246,9 @@ def load_current_data():
             data_b = sheet_b.get_all_values()
             if data_b and len(data_b) >= 2:
                 df_b = pd.DataFrame(data_b[1:], columns=data_b[0])
-                df_b = normalize_cols(df_b)
+                df_b.columns = [
+                    str(c).strip().lower().replace("\n", " ") for c in df_b.columns
+                ]
                 col_maq = next(
                     (c for c in df_b.columns if "cuim" in c or "asset" in c or "maq" in c),
                     df_b.columns[0],
@@ -271,7 +258,7 @@ def load_current_data():
                     df_b["fecha"], dayfirst=True, errors="coerce"
                 ).dt.date
                 df_b = df_b.dropna(subset=["fecha"])
-                non_numeric_cols = {"fecha", "asset_id", "cuim", "marca", "modelo", "juego", "fabricante"}
+                non_numeric_cols = {"fecha", "asset_id", "marca", "modelo", "juego", "fabricante"}
                 for col in df_b.columns:
                     if col not in non_numeric_cols:
                         df_b[col] = clean_col_vectorized(df_b[col])
@@ -292,7 +279,7 @@ def load_users():
         client = get_gspread_client()
         sheet_u = client.open_by_key(ID_CONFIGURACION).worksheet("Usuarios")
         df_u = pd.DataFrame(sheet_u.get_all_records())
-        df_u.columns = [str(c).strip() for c in df_u.columns]  # usuarios: mantener case original
+        df_u.columns = [str(c).strip() for c in df_u.columns]
         return df_u
     except Exception as e:
         st.error(f"No se pudo cargar usuarios: {e}")
@@ -307,14 +294,9 @@ def _get_cubo_data(client, book_id: str) -> pd.DataFrame:
         if not data:
             return pd.DataFrame()
         df = pd.DataFrame(data[1:], columns=data[0])
-        df = normalize_cols(df)
+        df.columns = [str(c).strip().lower() for c in df.columns]
         if "cuim" in df.columns:
             df = df.rename(columns={"cuim": "asset_id"})
-        if "asset_id" not in df.columns:
-            # Fallback: buscar columna con "asset" o "id" en el nombre
-            candidate = next((c for c in df.columns if "asset" in c or c == "id"), None)
-            if candidate:
-                df = df.rename(columns={candidate: "asset_id"})
         df = df.loc[:, ~df.columns.str.contains(r"^$|Unnamed", case=False, na=False)]
         df["fecha"] = pd.to_datetime(df["fecha"], dayfirst=True, errors="coerce").dt.date
         df = df.dropna(subset=["fecha"])
